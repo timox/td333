@@ -158,17 +158,10 @@ local function get_midi_out(name)
 end
 
 local function send_sysex(out, msg)
-  if type(out.send_sysex) == "function" then
-    out:send_sysex(msg)
-  elseif pcall(function() out:send(msg) end) then
-    return
-  elseif type(out.send_sysex_message) == "function" then
-    local payload = {}
-    for i = 2, #msg - 1 do table.insert(payload, msg[i]) end
-    out:send_sysex_message(payload)
-  else
-    error("MIDI output does not support SysEx in this Renoise version")
-  end
+  -- Renoise's MidiOutputDevice:send() accepts SysEx as long as the message
+  -- is framed with 0xF0..0xF7. The probe-for-method pattern triggers an
+  -- __index error on unknown properties, so just call :send().
+  out:send(msg)
 end
 
 -- All channel-voice messages use the user-selected MIDI channel (1..16).
