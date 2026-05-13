@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Nouvelle version (Renoise n'accepte qu'un float, ex. 0.2)"
+        description: "Nouvelle version (semver, ex. 0.2.0)"
         required: true
         type: string
       draft:
@@ -26,11 +26,8 @@ jobs:
 
       - name: Sanity-check the version string
         run: |
-          # Renoise rejects anything but a plain decimal number in
-          # <Version>; we keep the same string in pyproject.toml (PEP 440
-          # accepts "X.Y" just fine).
-          if ! [[ "${{ inputs.version }}" =~ ^[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::version '${{ inputs.version }}' must be a float like 0.2 (Renoise requirement)"
+          if ! [[ "${{ inputs.version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version '${{ inputs.version }}' must be semver X.Y.Z"
             exit 1
           fi
           if git rev-parse "v${{ inputs.version }}" >/dev/null 2>&1; then

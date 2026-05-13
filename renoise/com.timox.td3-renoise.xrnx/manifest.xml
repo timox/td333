@@ -1,11 +1,25 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <RenoiseScriptingTool doc_version="0">
-  <ApiVersion>6.1</ApiVersion>
-  <Id>com.timox.td3-renoise</Id>
-  <Version>0.1</Version>
-  <Author>td333</Author>
   <Name>TD-3 Pattern Export</Name>
+  <Id>com.timox.td3-renoise</Id>
+  <Version>0.1.0</Version>
+  <ApiVersion>6.1</ApiVersion>
+  <Author>timox</Author>
   <Category>MIDI</Category>
-  <Description>Exporte une pattern Renoise (16 lignes) vers un slot mémoire du Behringer TD-3 via SysEx, avec preview audio et dump hex avant écriture.</Description>
-  <Homepage>https://github.com/timox/td333</Homepage>
+  <Description>
+Exporte la pattern courante de Renoise vers la mémoire du Behringer TD-3 via SysEx.
+
+Mapping (16 lignes de la piste sélectionnée) :
+- Note column → pitch (clampée à C1..C4)
+- Volume column ≥ seuil (défaut 0x60) → accent
+- Effet "0G" ou "G0" sur la même ligne → slide
+- Ligne sans note → rest
+
+Permet de :
+- prévisualiser le pattern en MIDI temps réel sans toucher la mémoire,
+- voir le SysEx en hex avant envoi,
+- écrire dans un slot (groupe I..IV / pattern 1A..8B) avec confirmation.
+
+Menu: Tools → TD-3 Pattern Export
+  </Description>
 </RenoiseScriptingTool>
