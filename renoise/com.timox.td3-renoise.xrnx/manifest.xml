@@ -2,7 +2,7 @@
 <RenoiseScriptingTool doc_version="0">
   <Name>TD-3 Pattern Export</Name>
   <Id>com.timox.td3-renoise</Id>
-  <Version>0.3</Version>
+  <Version>0.4</Version>
   <ApiVersion>6.1</ApiVersion>
   <Author>timox</Author>
   <Category>MIDI</Category>
