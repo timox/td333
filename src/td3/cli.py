@@ -10,13 +10,23 @@ import click
 from .pattern import Pattern
 from .sqs import SQSFile, read_sqs, write_sqs
 from .sysex import iter_sysex, pattern_to_sysex, request_pattern, sysex_to_pattern
-from .yaml_io import pattern_from_yaml, pattern_to_yaml
-
-_GROUP_LETTERS = "ABCD"
+from .yaml_io import _GROUP_LABELS, format_pattern_label, pattern_from_yaml, pattern_to_yaml
 
 
 def _filename_for(p: Pattern) -> str:
-    return f"{_GROUP_LETTERS[p.group]}{p.number + 1:02d}.yml"
+    return f"{_GROUP_LABELS[p.group]}-{format_pattern_label(p.number)}.yml"
+
+
+def _sorted_pattern_files(directory: Path) -> list[Path]:
+    """Collect pattern YAMLs sorted by (group, pattern) regardless of label width."""
+    files = [f for f in directory.glob("*.yml") if f.stem != "_meta"]
+    def key(f: Path):
+        try:
+            p = pattern_from_yaml(f.read_text())
+            return (p.group, p.number)
+        except Exception:
+            return (99, 99)
+    return sorted(files, key=key)
 
 
 @click.group()
@@ -51,7 +61,7 @@ def unpack(sqs_path: Path, out_dir: Path) -> None:
 @click.option("--version", default="2.0.1",  show_default=True)
 def pack(yaml_dir: Path, out_path: Path, product: str, version: str) -> None:
     """Recompacte un dossier de YAML en un .sqs (64 patterns attendus)."""
-    files = sorted(yaml_dir.glob("[A-D]*.yml"))
+    files = _sorted_pattern_files(yaml_dir)
     patterns = [pattern_from_yaml(f.read_text()) for f in files]
     if len(patterns) != 64:
         click.echo(f"warning: got {len(patterns)} patterns (expected 64)", err=True)
@@ -143,7 +153,7 @@ def send_all(yaml_dir: Path, port: str) -> None:
     """Envoie tous les patterns YAML d'un dossier vers la TD-3."""
     mido = _require_mido()
     target = _resolve_port(mido.get_output_names(), port)
-    files = sorted(Path(yaml_dir).glob("[A-D]*.yml"))
+    files = _sorted_pattern_files(Path(yaml_dir))
     with mido.open_output(target) as out:
         for f in files:
             p = pattern_from_yaml(f.read_text())

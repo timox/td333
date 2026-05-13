@@ -14,7 +14,7 @@ reference and the beholder-d/td3-pattern project on GitHub:
     0x62     2    triplet     (LSB nibble = 0 or 1)
     0x64     2    step count  (MSB nibble + LSB nibble; "01 00" = 16 steps)
     0x66     2    unknown 2   (00 00 in factory dumps)
-    0x68     4    tie mask    (low-nibble layout 7654/3210/FEDC/BA98)
+    0x68     4    hold mask   (low-nibble layout 7654/3210/FEDC/BA98)
     0x6C     4    rest mask   (same low-nibble layout)
 
 Pitches / accent / slide are INDEXED BY STEP (entry i corresponds to step i).
@@ -22,9 +22,15 @@ Rest mask separately marks which steps are silenced; the stored pitch for a
 rest step is preserved verbatim (typically 0x18 when the slot was never
 programmed, but can be any value — for example from a previous edit).
 
+Hold mask uses INVERTED semantics: bit set (1) = normal note, bit clear (0) =
+held / tied to the previous step (the TD-3 firmware ignores the held step's
+own data and inherits the previous step's pitch/accent/slide). All-ones
+(0F 0F 0F 0F) means "no ties anywhere", which is the factory default.
+
 Each stored pitch is a 7-bit storage value (the MIDI number minus 12 — the
 303patterns reference describes this as "one octave lower than standard
-MIDI"). 0x18 (= MIDI 36 = C2) is the firmware's idle default.
+MIDI"). The TD-3 keyboard covers 3 octaves: storage 0x0C..0x30 (C1..C4).
+0x18 (= MIDI 36 = C2) is the firmware's idle default.
 """
 from __future__ import annotations
 
@@ -72,7 +78,8 @@ class Pattern:
         if step_count == 0:
             step_count = 16
         unknown2 = bytes(blk[0x66:0x68])
-        tie_mask  = _decode_step_mask(blk[0x68:0x6C])
+        # Hold mask is INVERTED: bit=0 → step is tied to previous; bit=1 → normal.
+        hold_bits = _decode_step_mask(blk[0x68:0x6C])
         rest_mask = _decode_step_mask(blk[0x6C:0x70])
 
         steps = [
@@ -81,7 +88,7 @@ class Pattern:
                 rest=rest_mask[i],
                 accent=bool(accent[i] & 1),
                 slide=bool(slide[i] & 1),
-                tie=tie_mask[i],
+                tie=not hold_bits[i],
             )
             for i in range(STEPS)
         ]
@@ -101,7 +108,8 @@ class Pattern:
         accent  = [1 if s.accent else 0   for s in self.steps]
         slide   = [1 if s.slide  else 0   for s in self.steps]
         rest_bits = [s.rest for s in self.steps]
-        tie_bits  = [s.tie  for s in self.steps]
+        # Invert tie → hold mask (bit=1 means "normal", bit=0 means "tied").
+        hold_bits = [not s.tie for s in self.steps]
 
         out = bytearray(DATA_SIZE)
         out[0x00:0x02] = self.unknown1
@@ -114,7 +122,7 @@ class Pattern:
         out[0x64] = (sc >> 4) & 0x0F
         out[0x65] = sc & 0x0F
         out[0x66:0x68] = self.unknown2
-        out[0x68:0x6C] = _encode_step_mask(tie_bits)
+        out[0x68:0x6C] = _encode_step_mask(hold_bits)
         out[0x6C:0x70] = _encode_step_mask(rest_bits)
         return bytes(out)
 

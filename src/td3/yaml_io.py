@@ -46,7 +46,29 @@ import yaml
 from .notes import midi_to_name, name_to_midi
 from .pattern import DEFAULT_NOTE_MIDI, STEPS, Pattern, Step
 
-_GROUP_LETTERS = "ABCD"
+# TD-3 groups are labelled I..IV on the front panel; patterns inside a group
+# are labelled 1A..8A (numbers 0..7) and 1B..8B (numbers 8..15) per TB-303
+# convention.
+_GROUP_LABELS = ("I", "II", "III", "IV")
+_GROUP_LABEL_LOOKUP = {label.upper(): i for i, label in enumerate(_GROUP_LABELS)}
+# Accept legacy A/B/C/D as well so old YAML files keep loading.
+for i, letter in enumerate("ABCD"):
+    _GROUP_LABEL_LOOKUP.setdefault(letter, i)
+
+
+def format_pattern_label(number: int) -> str:
+    """0..7 → '1A'..'8A'; 8..15 → '1B'..'8B'."""
+    half = "A" if number < 8 else "B"
+    return f"{(number % 8) + 1}{half}"
+
+
+def parse_pattern_label(s: str) -> int:
+    s = s.strip().upper()
+    if len(s) >= 2 and s[-1] in ("A", "B") and s[:-1].isdigit():
+        idx = int(s[:-1]) - 1
+        if 0 <= idx <= 7:
+            return idx + (0 if s[-1] == "A" else 8)
+    raise ValueError(f"invalid pattern label {s!r} (expected 1A..8B)")
 _FLAG_ALIASES = {
     "accent": "accent", "!": "accent", "a": "accent",
     "slide":  "slide",  "~": "slide",  "s": "slide",
@@ -71,8 +93,8 @@ def _step_token(s: Step) -> str:
 
 def pattern_to_yaml(p: Pattern) -> str:
     data: dict[str, Any] = {
-        "group":      _GROUP_LETTERS[p.group],
-        "pattern":    p.number + 1,
+        "group":      _GROUP_LABELS[p.group],
+        "pattern":    format_pattern_label(p.number),
         "triplet":    p.triplet,
         "step_count": p.step_count,
         "seq":        [_step_token(s) for s in p.steps],
@@ -93,19 +115,22 @@ def _parse_group(v: Any) -> int:
         if not 0 <= v <= 3:
             raise ValueError(f"group {v} out of range 0..3")
         return v
-    if isinstance(v, str) and len(v) == 1 and v.upper() in _GROUP_LETTERS:
-        return _GROUP_LETTERS.index(v.upper())
-    raise ValueError(f"invalid group {v!r}; use A..D or 0..3")
+    if isinstance(v, str):
+        key = v.strip().upper()
+        if key in _GROUP_LABEL_LOOKUP:
+            return _GROUP_LABEL_LOOKUP[key]
+    raise ValueError(f"invalid group {v!r}; use I..IV or 0..3")
 
 
 def _parse_pattern_num(v: Any) -> int:
-    if not isinstance(v, int):
-        raise ValueError(f"pattern must be an integer, got {v!r}")
-    if 1 <= v <= 16:
-        return v - 1
-    if 0 <= v <= 15:
-        return v
-    raise ValueError(f"pattern {v} out of range 1..16 (or 0..15)")
+    if isinstance(v, str):
+        return parse_pattern_label(v)
+    if isinstance(v, int):
+        if 1 <= v <= 16:
+            return v - 1
+        if 0 <= v <= 15:
+            return v
+    raise ValueError(f"invalid pattern {v!r}; use 1A..8B (or integer 0..15)")
 
 
 def _parse_step(token: Any, index: int) -> Step:
