@@ -32,6 +32,7 @@ local COLOR_GROUP = {0x55, 0x55, 0x55}   -- group separator
 
 local PREFS = renoise.Document.create("Td3RenoisePrefs") {
   midi_out_name        = "",
+  midi_in_name         = "",
   midi_channel         = 1,    -- 1..16
   group_index          = 1,    -- 1..4 → I..IV
   pattern_index        = 1,    -- 1..16 → 1A..8B
@@ -164,6 +165,155 @@ local function send_sysex(out, msg)
   -- is framed with 0xF0..0xF7. The probe-for-method pattern triggers an
   -- __index error on unknown properties, so just call :send().
   out:send(msg)
+end
+
+
+-- ---------------------------------------------------------------------------
+-- MIDI input + TD-3 SysEx config probe
+-- ---------------------------------------------------------------------------
+
+local _midi_in, _midi_in_name = nil, nil
+
+local function get_midi_in(name, sysex_cb)
+  if _midi_in_name ~= name then
+    if _midi_in then _midi_in:close() end
+    _midi_in, _midi_in_name = nil, nil
+  end
+  if not _midi_in and name and name ~= "" then
+    _midi_in = renoise.Midi.create_input_device(name, nil, sysex_cb)
+    _midi_in_name = name
+  end
+  return _midi_in
+end
+
+-- Helpers to build the request SysEx frames (mirroring src/td3/config.py).
+local SYX_HDR = { 0xF0, 0x00, 0x20, 0x32, 0x00, 0x01, 0x0A }
+
+local function sysex_frame(opcode, ...)
+  local t = {}
+  for _, b in ipairs(SYX_HDR) do table.insert(t, b) end
+  table.insert(t, opcode)
+  for _, b in ipairs({...}) do table.insert(t, b) end
+  table.insert(t, 0xF7)
+  return t
+end
+
+local function parse_config_response(msg)
+  -- Expected: F0 00 20 32 00 01 0A 76 <10 bytes> F7  (19 bytes total)
+  if #msg < 19 or msg[8] ~= 0x76 then return nil end
+  return {
+    midi_output_channel       = msg[9]  + 1,
+    midi_input_channel        = msg[10] + 1,
+    midi_input_transpose      = msg[11] - 12,
+    pitch_bend_semitones      = msg[12],
+    key_priority              = msg[13],
+    multi_trigger             = msg[14] == 1,
+    clock_trigger_polarity    = msg[15],
+    clock_trigger_rate        = msg[16],
+    clock_source              = msg[17],
+    accent_velocity_threshold = msg[18],
+  }
+end
+
+local function parse_fw_response(msg)
+  -- F0 00 20 32 00 01 0A 09 00 <maj> <min> <rev> F7
+  if #msg < 13 or msg[8] ~= 0x09 then return nil end
+  return string.format("%d.%d.%d", msg[10], msg[11], msg[12])
+end
+
+local CLOCK_SRC  = {"Internal", "MIDI DIN", "MIDI USB", "Trigger"}
+local KEY_PRIO   = {"Low", "High", "Last"}
+
+local function check_td3_config(on_done)
+  local out = get_midi_out(PREFS.midi_out_name.value)
+  if not out then
+    renoise.app():show_warning("Pas de port MIDI OUT sélectionné.")
+    return
+  end
+  if PREFS.midi_in_name.value == "" then
+    renoise.app():show_warning("Pas de port MIDI IN sélectionné (sortie MIDI de la TD-3).")
+    return
+  end
+
+  local collected = {}
+  local got_cfg, got_fw = nil, nil
+
+  get_midi_in(PREFS.midi_in_name.value, function(msg)
+    if not msg or #msg < 8 then return end
+    if msg[8] == 0x76 then got_cfg = parse_config_response(msg) end
+    if msg[8] == 0x09 then got_fw  = parse_fw_response(msg) end
+  end)
+
+  -- Send the two queries back-to-back.
+  out:send(sysex_frame(0x08, 0))    -- request firmware version
+  out:send(sysex_frame(0x75))       -- request full config
+
+  -- Give the TD-3 ~500 ms to answer, then assemble the report.
+  local fired = false
+  local function finish()
+    if fired then return end
+    fired = true
+    local lines = {}
+    table.insert(lines, "=== Vérification TD-3 ===")
+    if got_fw then
+      table.insert(lines, "Firmware : " .. got_fw)
+    else
+      table.insert(lines, "Firmware : (pas de réponse — vérifier MIDI IN / câble)")
+    end
+    if got_cfg then
+      table.insert(lines, string.format("Canal MIDI in/out : %d / %d",
+        got_cfg.midi_input_channel, got_cfg.midi_output_channel))
+      table.insert(lines, "Clock source : " ..
+        (CLOCK_SRC[got_cfg.clock_source + 1] or "?"))
+      table.insert(lines, "Key priority : " ..
+        (KEY_PRIO[got_cfg.key_priority + 1] or "?"))
+      table.insert(lines, "Multi-trigger : " .. tostring(got_cfg.multi_trigger))
+      table.insert(lines, "Accent velocity threshold : " ..
+        tostring(got_cfg.accent_velocity_threshold))
+      table.insert(lines, "Transpose MIDI in : " ..
+        tostring(got_cfg.midi_input_transpose))
+      table.insert(lines, "Pitch Bend range : " ..
+        tostring(got_cfg.pitch_bend_semitones))
+
+      -- Warnings
+      table.insert(lines, "")
+      table.insert(lines, "--- Diagnostic ---")
+      if got_cfg.clock_source == 0 then
+        table.insert(lines, "⚠  Clock source = Internal : la TD-3 IGNORE les notes MIDI in. Mettez le sélecteur TIME MODE en MIDI ou USB.")
+      else
+        table.insert(lines, "✓  Clock source compatible MIDI in")
+      end
+      if got_cfg.midi_input_channel ~= PREFS.midi_channel.value then
+        table.insert(lines, string.format(
+          "⚠  Canal MIDI input TD-3 = %d, l'outil envoie sur %d → mismatch. Changez Ch dans la toolbar ou écrivez le canal de la TD-3 via SysEx.",
+          got_cfg.midi_input_channel, PREFS.midi_channel.value))
+      else
+        table.insert(lines, string.format("✓  Canal MIDI = %d, cohérent",
+          got_cfg.midi_input_channel))
+      end
+      if got_cfg.accent_velocity_threshold >
+         math.min(PREFS.normal_velocity.value, PREFS.accent_velocity.value) then
+        table.insert(lines, string.format(
+          "ℹ  Accent threshold TD-3 = %d. Les notes envoyées avec vel < %d ne déclencheront PAS l'accent ; vel ≥ %d le déclenchera.",
+          got_cfg.accent_velocity_threshold,
+          got_cfg.accent_velocity_threshold,
+          got_cfg.accent_velocity_threshold))
+      end
+    else
+      table.insert(lines, "Config : (pas de réponse 0x76)")
+    end
+    if on_done then on_done(table.concat(lines, "\n")) end
+  end
+
+  -- Renoise add_timer fires at intervals; use a one-shot via remove inside.
+  local timer
+  timer = function()
+    finish()
+    if renoise.tool():has_timer(timer) then
+      renoise.tool():remove_timer(timer)
+    end
+  end
+  renoise.tool():add_timer(timer, 500)
 end
 
 -- All channel-voice messages use the user-selected MIDI channel (1..16).
@@ -397,6 +547,8 @@ local function show_dialog()
 
   local midi_outs = renoise.Midi.available_output_devices()
   if #midi_outs == 0 then midi_outs = {"(no MIDI output detected)"} end
+  local midi_ins = renoise.Midi.available_input_devices()
+  if #midi_ins  == 0 then midi_ins  = {"(no MIDI input detected)"} end
   local function find_index(t, v)
     for i, x in ipairs(t) do if x == v then return i end end
     return nil
@@ -414,11 +566,15 @@ local function show_dialog()
   }
 
   local toolbar2 = vb:row {
-    vb:text { text = "MIDI out", width = 60 },
+    vb:text { text = "MIDI in/out", width = 70 },
+    vb:popup { items = midi_ins,
+               value = math.max(1, find_index(midi_ins, PREFS.midi_in_name.value) or 1),
+               notifier = function(v) PREFS.midi_in_name.value = midi_ins[v] end,
+               width = 160 },
     vb:popup { items = midi_outs,
                value = math.max(1, find_index(midi_outs, PREFS.midi_out_name.value) or 1),
                notifier = function(v) PREFS.midi_out_name.value = midi_outs[v] end,
-               width = 200 },
+               width = 160 },
     vb:text { text = "  Ch" },
     vb:valuebox { min = 1, max = 16, value = PREFS.midi_channel.value,
                   notifier = function(v) PREFS.midi_channel.value = v end },
@@ -457,6 +613,12 @@ local function show_dialog()
   }
 
   local toolbar3 = vb:row {
+    vb:button { text = "Check TD-3", width = 100,
+                notifier = function()
+                  check_td3_config(function(report)
+                    renoise.app():show_prompt("Vérification TD-3", report, { "OK" })
+                  end)
+                end },
     vb:button { text = "Clear", width = 70,
                 notifier = function() state.steps = new_steps(); repaint_all(); on_change() end },
     vb:button { text = "Import depuis Renoise", width = 170,
