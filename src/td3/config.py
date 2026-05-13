@@ -7,22 +7,32 @@ Behringer manufacturer header :code:`F0 00 20 32 00 01 0A`.
 
 Opcodes (TX = host → TD-3, RX = TD-3 → host):
 
-    0x08 TX   request firmware version  payload: [0]
-    0x09 RX   firmware version response payload: [0, major, minor, revision]
-    0x0E TX   set MIDI channels         payload: [1, out_ch-1, in_ch-1]
-    0x0F TX   set MIDI input transpose  payload: [val + 12]
-    0x11 TX   set pitch bend semitones  payload: [val, 0]
-    0x12 TX   set key priority          payload: [val]   (0=Low,1=High,2=Last)
-    0x14 TX   set multi-trigger         payload: [bool, 0]
-    0x19 TX   set clock trigger polarity payload: [val] (0=Fall,1=Rise)
-    0x1A TX   set clock trigger rate    payload: [val]   (0=1PPS,1=2PPQ,2=24,3=48)
-    0x1B TX   set clock source          payload: [val]   (0=Int,1=DIN,2=USB,3=Trig)
-    0x1C TX   set accent velocity threshold payload: [val] (0..127)
-    0x75 TX   request full config       payload: []
-    0x76 RX   config dump response      payload: see Td3Config layout below
-    0x77 TX   request pattern           payload: [group, pattern]
-    0x78 TX/RX pattern data             payload: see td3.sysex
-    0x7D TX   reset to factory defaults payload: []
+    0x01 RX   generic ACK to SET commands     payload: [0, 0]
+    0x03 TX   special control                 0x03 0x30 → enter DFU/firmware update mode
+    0x04 TX   request model name              payload: []
+    0x05 RX   model response                  payload: ASCII bytes
+    0x06 TX   request product name            payload: []
+    0x07 RX   product response                payload: ASCII bytes
+    0x08 TX   request firmware version        payload: [0]
+    0x09 RX   firmware version response       payload: [0, major, minor, revision]
+    0x0E TX   set MIDI channels               payload: [1, out_ch-1, in_ch-1]
+    0x0F TX   set MIDI input transpose        payload: [val + 12]
+    0x11 TX   set pitch bend semitones        payload: [val, 0]
+    0x12 TX   set key priority                payload: [val]   (0=Low,1=High,2=Last)
+    0x14 TX   set multi-trigger               payload: [bool, 0]
+    0x19 TX   set clock trigger polarity      payload: [val] (0=Fall,1=Rise)
+    0x1A TX   set clock trigger rate          payload: [val] (0=1PPS,1=2PPQ,2=24,3=48)
+    0x1B TX   set clock source                payload: [val] (0=Int,1=DIN,2=USB,3=Trig)
+    0x1C TX   set accent velocity threshold   payload: [val] (0..127)
+    0x50 TX   enter / exit hardware test mode payload: [0/1]
+              In test mode the TD-3 sends channel-aftertouch (0xA0..0xA4)
+              to report tempo knob / track knob / mode knob / front-panel
+              button positions in real time.
+    0x75 TX   request full config             payload: []
+    0x76 RX   config dump response            payload: see Td3Config below
+    0x77 TX   request pattern                 payload: [group, pattern]
+    0x78 TX/RX pattern data                   payload: see td3.sysex
+    0x7D TX   reset to factory defaults       payload: []
 
 The config response (0x76) payload layout, in order::
 
@@ -58,6 +68,14 @@ OP_SET_ACC_THR   = 0x1C
 OP_REQUEST_CFG   = 0x75
 OP_CFG_RESPONSE  = 0x76
 OP_RESET         = 0x7D
+# Additional opcodes documented on 303patterns.com
+OP_ACK           = 0x01
+OP_DFU           = 0x03
+OP_GET_MODEL     = 0x04
+OP_MODEL_RESP    = 0x05
+OP_GET_PRODUCT   = 0x06
+OP_PRODUCT_RESP  = 0x07
+OP_TEST_MODE     = 0x50
 
 
 def _frame(opcode: int, *payload: int) -> bytes:
@@ -78,6 +96,28 @@ def request_config() -> bytes:
 
 def reset_to_defaults() -> bytes:
     return _frame(OP_RESET)
+
+
+def request_model() -> bytes:
+    return _frame(OP_GET_MODEL)
+
+
+def request_product_name() -> bytes:
+    return _frame(OP_GET_PRODUCT)
+
+
+def enter_test_mode(enabled: bool = True) -> bytes:
+    """Toggle hardware test mode. In test mode the TD-3 emits channel
+    aftertouch messages on channels 0..4 reflecting the position of the
+    front-panel tempo / track / mode rotaries and button presses."""
+    return _frame(OP_TEST_MODE, 1 if enabled else 0)
+
+
+def enter_dfu_mode() -> bytes:
+    """Reboot into firmware-update (DFU) mode. After this the TD-3 re-enumerates
+    over USB as PID 1227 and will accept a .syx firmware blob from Synthtribe.
+    Do not call casually."""
+    return bytes([0xF0]) + MFR_HEADER + bytes([OP_DFU, 0x30, 0xF7])
 
 
 def set_midi_channels(input_ch: int, output_ch: int) -> bytes:
@@ -151,6 +191,21 @@ class FirmwareVersion:
 
 
 @dataclass
+class ModelName:
+    name: str
+
+
+@dataclass
+class ProductName:
+    name: str
+
+
+@dataclass
+class AckReply:
+    pass  # Generic acknowledgement of a SET command.
+
+
+@dataclass
 class Td3Config:
     midi_output_channel: int          # 1..16
     midi_input_channel: int           # 1..16
@@ -178,6 +233,12 @@ def parse_sysex(msg: bytes):
     if not body:
         return None
     opcode, *payload = body
+    if opcode == OP_ACK:
+        return AckReply()
+    if opcode == OP_MODEL_RESP:
+        return ModelName(name=bytes(payload).decode("ascii", errors="replace"))
+    if opcode == OP_PRODUCT_RESP:
+        return ProductName(name=bytes(payload).decode("ascii", errors="replace"))
     if opcode == OP_FW_RESPONSE and len(payload) >= 4:
         return FirmwareVersion(major=payload[1], minor=payload[2], revision=payload[3])
     if opcode == OP_CFG_RESPONSE and len(payload) >= 10:
