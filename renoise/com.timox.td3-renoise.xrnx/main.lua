@@ -28,6 +28,7 @@ local PREFS = renoise.Document.create("Td3RenoisePrefs") {
   triplet              = false,
   step_count           = 16,
   note_column          = 0,    -- 0 = auto (first non-empty), 1..12 = explicit
+  octave_shift         = -1,   -- semitones added to Renoise pitch (default -1)
   accent_threshold     = 0x60, -- volume column ≥ this → accent
   accent_velocity      = 100,
   preview_step_ms      = 125,  -- 1/16 note at 120 BPM
@@ -65,11 +66,18 @@ local function read_current_pattern(step_count)
       local line = track:line(i)
       local note_col = pick_note_column(line, PREFS.note_column.value)
       if note_col and note_col.note_value < 120 then
-        -- Renoise note_value 0..119 ↔ MIDI note - 12 ; TD-3 storage = MIDI - 12,
-        -- so note_value goes straight into storage with the same clamping.
-        local midi = note_col.note_value + 12
-        s.pitch = td3.midi_to_storage(midi)
+        -- Renoise note_value 0..119. TD-3 storage = MIDI - 12 = note_value,
+        -- range 12..48 (C-1..C-4 in Renoise display). We add the octave shift
+        -- BEFORE clamping and stash the raw value so the preview can flag
+        -- notes that got pinned to the bounds.
+        local raw  = note_col.note_value + PREFS.octave_shift.value * 12
+        local pinned
+        if raw < td3.PITCH_MIN then pinned, raw = "low",  td3.PITCH_MIN
+        elseif raw > td3.PITCH_MAX then pinned, raw = "high", td3.PITCH_MAX end
+        s.pitch = raw
         s.rest = false
+        s.original_note = note_col.note_value
+        s.pinned = pinned
         local vv = note_col.volume_value
         if vv < 128 and vv >= PREFS.accent_threshold.value then
           s.accent = true
@@ -185,6 +193,8 @@ local function format_step(s)
   if s.accent then txt = txt .. " !" end
   if s.slide  then txt = txt .. " ~" end
   if s.tie    then txt = txt .. " ^" end
+  if s.pinned == "high" then txt = txt .. "  ⚠ trop aigu (clampé)" end
+  if s.pinned == "low"  then txt = txt .. "  ⚠ trop grave (clampé)" end
   return txt
 end
 
