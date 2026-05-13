@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<RenoiseScriptingTool doc_version="0">
+  <ApiVersion>6.1</ApiVersion>
+  <Id>com.timox.td3-renoise</Id>
+  <Version>0.1.0</Version>
+  <Author>td333</Author>
+  <Name>TD-3 Pattern Export</Name>
+  <Category>MIDI</Category>
+  <Description>Exporte une pattern Renoise (16 lignes) vers un slot mémoire du Behringer TD-3 via SysEx, avec preview audio et dump hex avant écriture.</Description>
+  <Homepage>https://github.com/timox/td333</Homepage>
+</RenoiseScriptingTool>
