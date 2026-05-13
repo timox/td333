@@ -221,6 +221,9 @@ local function pattern_items()
   return t
 end
 
+local _dialog = nil
+local _auto_refresh_timer = nil
+
 local function show_dialog()
   local vb = renoise.ViewBuilder()
   local preview_view  = vb:multiline_text { width = 360, height = 220, font = "mono" }
@@ -230,7 +233,7 @@ local function show_dialog()
   local midi_outs = renoise.Midi.available_output_devices()
   if #midi_outs == 0 then midi_outs = {"(no MIDI output detected)"} end
 
-  local state = { steps = nil, sysex = nil }
+  local state = { steps = nil, sysex = nil, last_hash = nil }
 
   local function refresh()
     local step_count = PREFS.step_count.value
@@ -247,6 +250,44 @@ local function show_dialog()
       td3.format_pattern_label(PREFS.pattern_index.value - 1))
     status_view.text = "Slot cible : " .. slot
                        .. "  |  SysEx : " .. tostring(#state.sysex) .. " octets"
+  end
+
+  -- Compute a cheap hash of the relevant Renoise state so the auto-refresh
+  -- timer only redraws when something actually changed.
+  local function pattern_hash()
+    local song = renoise.song()
+    local pat_idx = song.selected_pattern_index
+    local trk_idx = song.selected_track_index
+    local pattern = song:pattern(pat_idx)
+    local track = pattern:track(trk_idx)
+    local parts = { pat_idx, trk_idx, PREFS.step_count.value, PREFS.note_column.value }
+    for i = 1, PREFS.step_count.value do
+      local line = track:line(i)
+      local nc = pick_note_column(line, PREFS.note_column.value)
+      table.insert(parts, (nc and nc.note_value or 121) .. ":" .. (nc and nc.volume_value or 255))
+      for ec = 1, #line.effect_columns do
+        local fx = line.effect_columns[ec]
+        if fx.number_string == "0G" or fx.number_string == "G0" then
+          table.insert(parts, "g" .. ec)
+        end
+      end
+    end
+    return table.concat(parts, "|")
+  end
+
+  local function auto_refresh_tick()
+    if not _dialog or not _dialog.visible then
+      if _auto_refresh_timer and renoise.tool():has_timer(_auto_refresh_timer) then
+        renoise.tool():remove_timer(_auto_refresh_timer)
+      end
+      _auto_refresh_timer = nil
+      return
+    end
+    local h = pattern_hash()
+    if h ~= state.last_hash then
+      state.last_hash = h
+      refresh()
+    end
   end
 
   local content = vb:column {
@@ -331,7 +372,11 @@ local function show_dialog()
   }
 
   refresh()
-  renoise.app():show_custom_dialog("TD-3 Pattern Export", content)
+  state.last_hash = pattern_hash()
+  if _dialog and _dialog.visible then _dialog:close() end
+  _dialog = renoise.app():show_custom_dialog("TD-3 Pattern Export", content)
+  _auto_refresh_timer = auto_refresh_tick
+  renoise.tool():add_timer(_auto_refresh_timer, 400)
 end
 
 -- ---------------------------------------------------------------------------
