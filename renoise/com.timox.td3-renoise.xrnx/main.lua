@@ -231,6 +231,23 @@ end
 local CLOCK_SRC  = {"Internal", "MIDI DIN", "MIDI USB", "Trigger"}
 local KEY_PRIO   = {"Low", "High", "Last"}
 
+--- Send the SysEx "Set clock source" (opcode 0x1B). Returns true on success.
+local function set_clock_source(value)
+  local out = get_midi_out(PREFS.midi_out_name.value)
+  if not out then renoise.app():show_warning("Pas de port MIDI OUT.") return false end
+  out:send(sysex_frame(0x1B, value))
+  return true
+end
+
+--- Send the SysEx "Set accent velocity threshold" (opcode 0x1C, 0..127).
+local function set_accent_threshold(value)
+  local out = get_midi_out(PREFS.midi_out_name.value)
+  if not out then renoise.app():show_warning("Pas de port MIDI OUT.") return false end
+  value = math.max(0, math.min(127, value))
+  out:send(sysex_frame(0x1C, value))
+  return true
+end
+
 --- Convert a TD-3 storage pitch byte (12..48) to the grid's
 -- {octave (1..4), semitone (1..12)} representation.
 local function pitch_to_oct_semi(storage)
@@ -653,6 +670,31 @@ local function show_dialog()
   -- Live filter cutoff (CC 74) — the only sound-shaping CC officially
   -- documented for the TD-3. Slider sends a CC message as you drag it.
   local cutoff_value_view = vb:text { text = tostring(PREFS.filter_cutoff.value), width = 28 }
+  -- TD-3 config write : clock source + accent threshold via SysEx.
+  -- Permet de contourner le sélecteur de clock source de la façade
+  -- quand on ne sait pas le manipuler (combinaison de touches non
+  -- évidente, mode caché du firmware…).
+  local toolbar_cfg = vb:row {
+    vb:text { text = "Clock source", width = 100 },
+    vb:popup {
+      items = CLOCK_SRC,
+      value = 3, -- default visual : "MIDI USB"
+      notifier = function(v) set_clock_source(v - 1) end,
+      width = 100,
+    },
+    vb:text { text = "  Accent thr" },
+    vb:valuebox {
+      min = 0, max = 127, value = 80,
+      notifier = function(v) set_accent_threshold(v) end,
+    },
+    vb:button { text = "Re-check", width = 80,
+                notifier = function()
+                  check_td3_config(function(report)
+                    renoise.app():show_prompt("Vérification TD-3", report, { "OK" })
+                  end)
+                end },
+  }
+
   local toolbar_cutoff = vb:row {
     vb:text { text = "Cutoff (CC 74)", width = 100 },
     vb:slider {
@@ -735,7 +777,7 @@ local function show_dialog()
   }
 
   -- Assemble ----------------------------------------------------------------
-  local content_items = { toolbar1, toolbar2, toolbar_cutoff, toolbar3, vb:space { height = 6 } }
+  local content_items = { toolbar1, toolbar2, toolbar_cfg, toolbar_cutoff, toolbar3, vb:space { height = 6 } }
   for _, r in ipairs(oct_rows)   do table.insert(content_items, r) end
   table.insert(content_items, vb:space { height = 4 })
   for _, r in ipairs(pitch_rows) do table.insert(content_items, r) end
