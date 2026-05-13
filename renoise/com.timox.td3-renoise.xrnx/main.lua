@@ -173,14 +173,21 @@ end
 -- ---------------------------------------------------------------------------
 
 local _midi_in, _midi_in_name = nil, nil
+local _midi_in_handler = nil
 
 local function get_midi_in(name, sysex_cb)
+  -- Always replace the active handler — opening the device only once and
+  -- keeping a stable internal callback that dispatches to the current
+  -- _midi_in_handler avoids ever silently dropping a new callback.
+  _midi_in_handler = sysex_cb
   if _midi_in_name ~= name then
     if _midi_in then _midi_in:close() end
     _midi_in, _midi_in_name = nil, nil
   end
   if not _midi_in and name and name ~= "" then
-    _midi_in = renoise.Midi.create_input_device(name, nil, sysex_cb)
+    _midi_in = renoise.Midi.create_input_device(name, nil, function(msg)
+      if _midi_in_handler then _midi_in_handler(msg) end
+    end)
     _midi_in_name = name
   end
   return _midi_in
