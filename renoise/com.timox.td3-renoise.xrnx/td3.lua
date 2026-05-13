@@ -153,6 +153,77 @@ function M.bytes_to_hex(arr)
 end
 
 -- ---------------------------------------------------------------------------
+-- Decoding incoming pattern data (TD-3 → host, opcode 0x78)
+-- ---------------------------------------------------------------------------
+
+local function decode_pairs(data, first, count)
+  local out = {}
+  for i = 0, count - 1 do
+    local hi = b.band(data[first + 2 * i],     0x0F)
+    local lo = b.band(data[first + 2 * i + 1], 0x0F)
+    out[i + 1] = b.bor(b.lshift(hi, 4), lo)
+  end
+  return out
+end
+
+local function decode_mask(data, first)
+  local bits = {}
+  for i = 1, M.STEPS do bits[i] = false end
+  for byte_i, steps in ipairs(MASK_LAYOUT) do
+    local nib = b.band(data[first + byte_i - 1], 0x0F)
+    for bit_i, step in ipairs(steps) do
+      if b.band(nib, b.rshift(0x08, bit_i - 1)) ~= 0 then
+        bits[step] = true
+      end
+    end
+  end
+  return bits
+end
+
+--- Decode a 112-byte data block back to a structured representation.
+-- Returns { pitches=[16], accent=[16], slide=[16], triplet=bool,
+--           step_count=int, hold_mask=[16], rest_mask=[16] }.
+-- Indexing is step-indexed (mirroring the encode side).
+function M.decode_data(data)
+  assert(#data == M.DATA_SIZE, "data must be 112 bytes")
+  local pitches = decode_pairs(data, 0x02 + 1, 16)
+  local accent  = decode_pairs(data, 0x22 + 1, 16)
+  local slide   = decode_pairs(data, 0x42 + 1, 16)
+  -- data[X + 1] reads byte at offset X (1-based array).
+  local triplet = b.band(data[0x62 + 1] or 0, 0x0F) ~= 0
+                  or b.band(data[0x63 + 1] or 0, 0x0F) ~= 0
+  local sc_hi   = b.band(data[0x64 + 1] or 0, 0x0F)
+  local sc_lo   = b.band(data[0x65 + 1] or 0, 0x0F)
+  local step_count = b.lshift(sc_hi, 4) + sc_lo
+  if step_count == 0 then step_count = 16 end
+  local hold_mask = decode_mask(data, 0x68 + 1)
+  local rest_mask = decode_mask(data, 0x6C + 1)
+  return {
+    pitches = pitches, accent = accent, slide = slide,
+    triplet = triplet, step_count = step_count,
+    hold_mask = hold_mask, rest_mask = rest_mask,
+  }
+end
+
+--- Extract the 112-byte data block from a SysEx 0x78 response.
+-- @param msg  1-indexed Lua array of bytes (full SysEx F0..F7).
+-- @return     group (0..3), pattern_number (0..15), 112-byte data array
+function M.parse_sysex_pattern(msg)
+  if not msg or #msg < 1 + 6 + 1 + 2 + M.DATA_SIZE + 1 then
+    return nil, "truncated SysEx"
+  end
+  if msg[1] ~= 0xF0 or msg[#msg] ~= 0xF7 then return nil, "missing F0/F7" end
+  for i, v in ipairs(M.SYSEX_HEADER) do
+    if msg[1 + i] ~= v then return nil, "wrong manufacturer header" end
+  end
+  if msg[8] ~= M.OP_WRITE then return nil, "not a pattern dump (opcode != 0x78)" end
+  local group, pat = msg[9], msg[10]
+  local data = {}
+  for i = 1, M.DATA_SIZE do data[i] = msg[10 + i] end
+  return group, pat, data
+end
+
+-- ---------------------------------------------------------------------------
 -- Group / pattern label helpers (TB-303 convention)
 -- ---------------------------------------------------------------------------
 

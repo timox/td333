@@ -224,6 +224,60 @@ end
 local CLOCK_SRC  = {"Internal", "MIDI DIN", "MIDI USB", "Trigger"}
 local KEY_PRIO   = {"Low", "High", "Last"}
 
+--- Convert a TD-3 storage pitch byte (12..48) to the grid's
+-- {octave (1..4), semitone (1..12)} representation.
+local function pitch_to_oct_semi(storage)
+  storage = math.max(12, math.min(48, storage))
+  return math.floor(storage / 12), (storage % 12) + 1
+end
+
+--- Pull a pattern from the TD-3 and fill the editor grid.
+local function read_pattern_from_td3(state_steps, group, pat, on_done)
+  local out = get_midi_out(PREFS.midi_out_name.value)
+  if not out then renoise.app():show_warning("Pas de port MIDI OUT.") return end
+  if PREFS.midi_in_name.value == "" then
+    renoise.app():show_warning("Pas de port MIDI IN.") return
+  end
+
+  local got = nil
+  get_midi_in(PREFS.midi_in_name.value, function(msg)
+    if msg and msg[8] == 0x78 then
+      local g, p, data = td3.parse_sysex_pattern(msg)
+      if data then got = { group = g, pat = p, data = data } end
+    end
+  end)
+
+  out:send(sysex_frame(0x77, group, pat))
+
+  local timer
+  timer = function()
+    if renoise.tool():has_timer(timer) then renoise.tool():remove_timer(timer) end
+    if not got then
+      renoise.app():show_warning(string.format(
+        "Pas de réponse de la TD-3 pour le slot %s / %s.",
+        td3.GROUP_LABELS[group + 1],
+        td3.format_pattern_label(pat)))
+      return
+    end
+    local decoded = td3.decode_data(got.data)
+    PREFS.triplet.value = decoded.triplet
+    for i = 1, td3.STEPS do
+      local oct, semi = pitch_to_oct_semi(decoded.pitches[i])
+      if decoded.rest_mask[i] then
+        state_steps[i] = { oct = 0, semi = 0,
+                           accent = decoded.accent[i] ~= 0,
+                           slide  = decoded.slide[i]  ~= 0 }
+      else
+        state_steps[i] = { oct = oct, semi = semi,
+                           accent = decoded.accent[i] ~= 0,
+                           slide  = decoded.slide[i]  ~= 0 }
+      end
+    end
+    if on_done then on_done(decoded) end
+  end
+  renoise.tool():add_timer(timer, 500)
+end
+
 local function check_td3_config(on_done)
   local out = get_midi_out(PREFS.midi_out_name.value)
   if not out then
@@ -618,6 +672,13 @@ local function show_dialog()
                   check_td3_config(function(report)
                     renoise.app():show_prompt("Vérification TD-3", report, { "OK" })
                   end)
+                end },
+    vb:button { text = "Read TD-3", width = 90,
+                notifier = function()
+                  read_pattern_from_td3(state.steps,
+                    PREFS.group_index.value - 1,
+                    PREFS.pattern_index.value - 1,
+                    function() repaint_all(); on_change() end)
                 end },
     vb:button { text = "Clear", width = 70,
                 notifier = function() state.steps = new_steps(); repaint_all(); on_change() end },
