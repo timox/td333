@@ -1,111 +1,151 @@
 --[[
-TD-3 Pattern Export – Renoise scripting tool.
+TD-3 Pattern Editor – Renoise scripting tool.
 
-Workflow :
-  1. on lit la pattern courante sur la piste sélectionnée (16 lignes,
-     12 en mode triplet) ;
-  2. mapping : note column → pitch (clampée à C1..C4) ; volume column
-     non vide → accent ; effet "0Gxx" (Glide) sur la même ligne → slide ;
-     ligne sans note → rest ;
-  3. la fenêtre montre un aperçu textuel et le SysEx en hex à envoyer ;
-  4. on peut "Preview audio" (envoi des Note On/Off temps réel au TD-3
-     sans toucher la mémoire) puis "Write to TD-3" (envoi du SysEx vers
-     le slot sélectionné, qui écrit en mémoire).
+Editor grid layout, top to bottom:
+  toolbar      : slot picker, MIDI out, import-from-renoise, send, preview
+  OCT          : 4 rows (octaves 1..4, mutually exclusive per step; empty
+                  column = default to octave 2)
+  PITCH        : 12 rows (B..C, top to bottom). One cell per column at most.
+                  An empty PITCH column means the step is a REST.
+  SLIDE        : per-step toggle
+  ACCENT       : per-step toggle
+  SysEx hex    : multiline read-only
+
+Step → TD-3 storage = ((octave or 2) - 1) * 12 + (semitone - 1) + 12,
+clamped to [0x0C, 0x30].
 ]]
 
 local td3 = require "td3"
 
--- Helper used in the dialog: find a value's 1-based index in an array, or nil.
-local function find_index(t, v)
-  for i, x in ipairs(t) do if x == v then return i end end
-  return nil
-end
+local PITCH_NAMES = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"}
+local STEPS       = 16
+
+-- Visual constants -----------------------------------------------------------
+local CELL_W      = 22
+local CELL_H      = 14
+local LABEL_W     = 56
+local COLOR_OFF   = {0xC8, 0xC2, 0xB0}   -- beige
+local COLOR_ON    = {0x90, 0x30, 0x28}   -- dark red
+local COLOR_GROUP = {0x55, 0x55, 0x55}   -- group separator
+
+-- Preferences ---------------------------------------------------------------
 
 local PREFS = renoise.Document.create("Td3RenoisePrefs") {
   midi_out_name        = "",
   group_index          = 1,    -- 1..4 → I..IV
   pattern_index        = 1,    -- 1..16 → 1A..8B
   triplet              = false,
-  step_count           = 16,
-  note_column          = 0,    -- 0 = auto (first non-empty), 1..12 = explicit
-  octave_shift         = -1,   -- semitones added to Renoise pitch (default -1)
-  accent_threshold     = 0x60, -- volume column ≥ this → accent
   accent_velocity      = 100,
   preview_step_ms      = 125,  -- 1/16 note at 120 BPM
+  -- Pattern state is persisted as a flat string of 16 step records:
+  --   "o:s:a:l" per step, joined by ";". o ∈ 0..4 (0=rest), s ∈ 0..12 (1..12
+  --   for C..B), a/l ∈ 0/1.
+  pattern_state        = "",
 }
 renoise.tool().preferences = PREFS
 
--- ---------------------------------------------------------------------------
--- Reading the current Renoise pattern
--- ---------------------------------------------------------------------------
+-- Pattern model -------------------------------------------------------------
 
--- Pick the meaningful note column on a given line.
--- column_pref = 0 → first non-empty column; else use that 1-based index.
-local function pick_note_column(line, column_pref)
-  if column_pref >= 1 then
-    return line.note_columns[column_pref]
+local function new_steps()
+  local t = {}
+  for i = 1, STEPS do
+    t[i] = { oct = 0, semi = 0, accent = false, slide = false }
   end
-  for i = 1, #line.note_columns do
-    local c = line.note_columns[i]
-    if c and c.note_value < 121 then  -- 121 = empty in Renoise
-      return c
-    end
-  end
-  return line.note_columns[1]
+  return t
 end
 
-local function read_current_pattern(step_count)
-  local song = renoise.song()
-  local pattern = song:pattern(song.selected_pattern_index)
-  local track_idx = song.selected_track_index
-  local track = pattern:track(track_idx)
-  local steps = {}
-  for i = 1, td3.STEPS do
-    local s = { rest = true }
-    if i <= step_count then
-      local line = track:line(i)
-      local note_col = pick_note_column(line, PREFS.note_column.value)
-      if note_col and note_col.note_value < 120 then
-        -- Renoise note_value 0..119. TD-3 storage = MIDI - 12 = note_value,
-        -- range 12..48 (C-1..C-4 in Renoise display). We add the octave shift
-        -- BEFORE clamping and stash the raw value so the preview can flag
-        -- notes that got pinned to the bounds.
-        local raw  = note_col.note_value + PREFS.octave_shift.value * 12
-        local pinned
-        if raw < td3.PITCH_MIN then pinned, raw = "low",  td3.PITCH_MIN
-        elseif raw > td3.PITCH_MAX then pinned, raw = "high", td3.PITCH_MAX end
-        s.pitch = raw
-        s.rest = false
-        s.original_note = note_col.note_value
-        s.pinned = pinned
-        local vv = note_col.volume_value
-        if vv < 128 and vv >= PREFS.accent_threshold.value then
-          s.accent = true
-        end
-        for ec = 1, #line.effect_columns do
-          local fx = line.effect_columns[ec]
-          if fx.number_string == "0G" or fx.number_string == "G0" then
-            s.slide = true
-          end
-        end
-      end
+local function steps_to_string(steps)
+  local parts = {}
+  for i = 1, STEPS do
+    local s = steps[i]
+    parts[i] = string.format("%d:%d:%d:%d",
+      s.oct, s.semi, s.accent and 1 or 0, s.slide and 1 or 0)
+  end
+  return table.concat(parts, ";")
+end
+
+local function steps_from_string(str)
+  local steps = new_steps()
+  if not str or str == "" then return steps end
+  local i = 1
+  for chunk in string.gmatch(str, "[^;]+") do
+    local o, s, a, l = chunk:match("(%d+):(%d+):(%d+):(%d+)")
+    if o and i <= STEPS then
+      steps[i] = {
+        oct    = tonumber(o),
+        semi   = tonumber(s),
+        accent = a == "1",
+        slide  = l == "1",
+      }
     end
-    steps[i] = s
+    i = i + 1
   end
   return steps
 end
 
--- ---------------------------------------------------------------------------
--- MIDI output helpers
--- ---------------------------------------------------------------------------
+local function step_to_td3(s)
+  if s.semi == 0 then
+    -- Rest: stash the default placeholder pitch (firmware's idle value).
+    return { pitch = td3.DEFAULT_PITCH, rest = true,
+             accent = s.accent, slide = s.slide }
+  end
+  local oct  = s.oct > 0 and s.oct or 2  -- default octave when none picked
+  local midi = (oct + 1) * 12 + (s.semi - 1)  -- (oct-1)*12 + (semi-1) + 24
+  return {
+    pitch  = td3.midi_to_storage(midi),
+    rest   = false,
+    accent = s.accent,
+    slide  = s.slide,
+    tie    = false,
+  }
+end
 
-local _midi_out = nil
-local _midi_out_name = nil
+-- Importing from the currently selected Renoise pattern --------------------
+
+local function pick_note_column(line)
+  for i = 1, #line.note_columns do
+    local c = line.note_columns[i]
+    if c and c.note_value < 121 then return c end
+  end
+  return line.note_columns[1]
+end
+
+local function import_from_renoise(steps, accent_threshold, octave_shift)
+  local song    = renoise.song()
+  local pattern = song:pattern(song.selected_pattern_index)
+  local track   = pattern:track(song.selected_track_index)
+  for i = 1, STEPS do
+    local line = track:line(i)
+    local nc = pick_note_column(line)
+    if nc and nc.note_value < 120 then
+      -- Renoise note_value (= MIDI - 12) → octave + semitone within TD-3 range
+      local nv  = nc.note_value + octave_shift * 12
+      local oct = math.floor(nv / 12)
+      local semi = (nv % 12) + 1
+      if oct < 1 then oct = 1 elseif oct > 4 then oct = 4; semi = 1 end
+      local acc = nc.volume_value < 128 and nc.volume_value >= accent_threshold
+      local sli = false
+      for ec = 1, #line.effect_columns do
+        local fx = line.effect_columns[ec]
+        if fx.number_string == "0G" or fx.number_string == "G0" then
+          sli = true
+        end
+      end
+      steps[i] = { oct = oct, semi = semi, accent = acc, slide = sli }
+    else
+      steps[i] = { oct = 0, semi = 0, accent = false, slide = false }
+    end
+  end
+end
+
+-- MIDI helpers --------------------------------------------------------------
+
+local _midi_out, _midi_out_name = nil, nil
 
 local function get_midi_out(name)
   if _midi_out_name ~= name then
     if _midi_out then _midi_out:close() end
-    _midi_out = nil
+    _midi_out, _midi_out_name = nil, nil
   end
   if not _midi_out and name and name ~= "" then
     _midi_out = renoise.Midi.create_output_device(name)
@@ -115,9 +155,6 @@ local function get_midi_out(name)
 end
 
 local function send_sysex(out, msg)
-  -- Renoise's MidiOutputDevice API has slightly varied across versions
-  -- — try the modern SysEx-aware method first, fall back to send() with the
-  -- full F0..F7 frame, then to a payload-only send_sysex_message().
   if type(out.send_sysex) == "function" then
     out:send_sysex(msg)
   elseif pcall(function() out:send(msg) end) then
@@ -135,42 +172,32 @@ local function send_short(out, status, d1, d2)
   out:send { status, d1, d2 }
 end
 
--- ---------------------------------------------------------------------------
--- Preview: stream the pattern as live Note On/Off
--- ---------------------------------------------------------------------------
+-- Preview audio --------------------------------------------------------------
 
-local preview_timer = nil
-local preview_state = nil
+local _preview_timer, _preview_state = nil, nil
 
 local function preview_stop()
-  if preview_timer then
-    if renoise.tool():has_timer(preview_timer) then
-      renoise.tool():remove_timer(preview_timer)
-    end
-    preview_timer = nil
+  if _preview_timer and renoise.tool():has_timer(_preview_timer) then
+    renoise.tool():remove_timer(_preview_timer)
   end
-  if preview_state and preview_state.out and preview_state.last_note then
-    send_short(preview_state.out, 0x80, preview_state.last_note, 0x40)
+  _preview_timer = nil
+  if _preview_state and _preview_state.out and _preview_state.last_note then
+    send_short(_preview_state.out, 0x80, _preview_state.last_note, 0x40)
   end
-  preview_state = nil
+  _preview_state = nil
 end
 
-local function preview_start(steps, step_count, step_ms, accent_velocity, out)
+local function preview_start(steps, step_ms, accent_velocity, out)
   preview_stop()
-  preview_state = { out = out, step = 0, steps = steps, count = step_count,
-                    last_note = nil, last_off_due = nil }
-  preview_timer = function()
-    local st = preview_state
+  _preview_state = { out = out, step = 0, last_note = nil, steps = steps }
+  _preview_timer = function()
+    local st = _preview_state
     if not st then return end
-    -- Switch off the previously playing note if any.
     if st.last_note then
       send_short(st.out, 0x80, st.last_note, 0x40)
       st.last_note = nil
     end
-    if st.step >= st.count then
-      preview_stop()
-      return
-    end
+    if st.step >= STEPS then preview_stop(); return end
     local s = st.steps[st.step + 1]
     if s and not s.rest and s.pitch then
       local midi = td3.storage_to_midi(s.pitch)
@@ -180,30 +207,16 @@ local function preview_start(steps, step_count, step_ms, accent_velocity, out)
     end
     st.step = st.step + 1
   end
-  renoise.tool():add_timer(preview_timer, step_ms)
+  renoise.tool():add_timer(_preview_timer, step_ms)
 end
 
--- ---------------------------------------------------------------------------
--- Build a step preview string for the dialog
--- ---------------------------------------------------------------------------
+-- Build the SysEx for the current state ------------------------------------
 
-local function format_step(s)
-  if s.rest then return "—" end
-  local txt = td3.midi_to_name(td3.storage_to_midi(s.pitch))
-  if s.accent then txt = txt .. " !" end
-  if s.slide  then txt = txt .. " ~" end
-  if s.tie    then txt = txt .. " ^" end
-  if s.pinned == "high" then txt = txt .. "  ⚠ trop aigu (clampé)" end
-  if s.pinned == "low"  then txt = txt .. "  ⚠ trop grave (clampé)" end
-  return txt
-end
-
-local function format_preview(steps, step_count)
-  local lines = {}
-  for i = 1, step_count do
-    table.insert(lines, string.format("%2d  %s", i, format_step(steps[i])))
-  end
-  return table.concat(lines, "\n")
+local function build_sysex(steps, group_index, pattern_index, triplet)
+  local td3_steps = {}
+  for i = 1, STEPS do td3_steps[i] = step_to_td3(steps[i]) end
+  local data = td3.encode_data(td3_steps, triplet, STEPS)
+  return td3.to_sysex(group_index - 1, pattern_index - 1, data)
 end
 
 local function chunk_hex(arr, per_line)
@@ -212,196 +225,244 @@ local function chunk_hex(arr, per_line)
   for i, b in ipairs(arr) do
     table.insert(line, string.format("%02X", b))
     if i % per_line == 0 then
-      table.insert(out, table.concat(line, " "))
-      line = {}
+      table.insert(out, table.concat(line, " ")); line = {}
     end
   end
   if #line > 0 then table.insert(out, table.concat(line, " ")) end
   return table.concat(out, "\n")
 end
 
--- ---------------------------------------------------------------------------
--- Dialog
--- ---------------------------------------------------------------------------
+-- Dialog --------------------------------------------------------------------
 
-local function group_items()  return td3.GROUP_LABELS end
+local _dialog = nil
+
+local function group_items() return td3.GROUP_LABELS end
 local function pattern_items()
   local t = {}
   for n = 0, 15 do table.insert(t, td3.format_pattern_label(n)) end
   return t
 end
 
-local _dialog = nil
-local _auto_refresh_timer = nil
-
 local function show_dialog()
-  local vb = renoise.ViewBuilder()
-  local preview_view  = vb:multiline_text { width = 360, height = 220, font = "mono" }
-  local hex_view      = vb:multiline_text { width = 360, height = 200, font = "mono" }
-  local status_view   = vb:text { text = "" }
+  local vb    = renoise.ViewBuilder()
+  local state = { steps = steps_from_string(PREFS.pattern_state.value) }
+  local cells = { oct = {}, pitch = {}, accent = {}, slide = {} }
+  local hex_view, status_view
+
+  local function persist()
+    PREFS.pattern_state.value = steps_to_string(state.steps)
+  end
+
+  local function rebuild_sysex_view()
+    local sysex = build_sysex(state.steps,
+      PREFS.group_index.value, PREFS.pattern_index.value, PREFS.triplet.value)
+    state.sysex = sysex
+    hex_view.text = chunk_hex(sysex, 16)
+    status_view.text = string.format("Slot : %s / %s   |   SysEx : %d octets",
+      td3.GROUP_LABELS[PREFS.group_index.value],
+      td3.format_pattern_label(PREFS.pattern_index.value - 1),
+      #sysex)
+  end
+
+  local function paint_cell(view, active)
+    view.color = active and COLOR_ON or COLOR_OFF
+  end
+
+  local function repaint_step(i)
+    local s = state.steps[i]
+    for o = 1, 4 do paint_cell(cells.oct[o][i],  s.oct == o)    end
+    for p = 1, 12 do paint_cell(cells.pitch[p][i], s.semi == p) end
+    paint_cell(cells.accent[i], s.accent)
+    paint_cell(cells.slide[i],  s.slide)
+  end
+
+  local function repaint_all()
+    for i = 1, STEPS do repaint_step(i) end
+  end
+
+  local function on_change()
+    persist(); rebuild_sysex_view()
+  end
+
+  -- Click handlers
+  local function toggle_oct(step, o)
+    local s = state.steps[step]
+    s.oct = (s.oct == o) and 0 or o
+    repaint_step(step); on_change()
+  end
+
+  local function toggle_pitch(step, p)
+    local s = state.steps[step]
+    s.semi = (s.semi == p) and 0 or p
+    repaint_step(step); on_change()
+  end
+
+  local function toggle_accent(step)
+    state.steps[step].accent = not state.steps[step].accent
+    repaint_step(step); on_change()
+  end
+
+  local function toggle_slide(step)
+    state.steps[step].slide = not state.steps[step].slide
+    repaint_step(step); on_change()
+  end
+
+  -- Build rows ---------------------------------------------------------------
+  local function make_cell(notifier_fn)
+    return vb:button {
+      width = CELL_W, height = CELL_H,
+      color = COLOR_OFF,
+      notifier = notifier_fn,
+    }
+  end
+
+  local function group_spacer()
+    return vb:space { width = 4 }
+  end
+
+  local function row_with_cells(label, store, click_factory)
+    local items = { vb:text { text = label, width = LABEL_W, font = "mono" } }
+    for s = 1, STEPS do
+      local btn = make_cell(click_factory(s))
+      store[s] = btn
+      table.insert(items, btn)
+      if s % 4 == 0 and s < STEPS then table.insert(items, group_spacer()) end
+    end
+    return vb:row(items)
+  end
+
+  -- OCT rows (top to bottom: 4..1, so highest octave on top)
+  local oct_rows = {}
+  for o = 4, 1, -1 do
+    cells.oct[o] = {}
+    local items = { vb:text { text = "OCT " .. o, width = LABEL_W, font = "mono" } }
+    for s = 1, STEPS do
+      local cell = make_cell(function() toggle_oct(s, o) end)
+      cells.oct[o][s] = cell
+      table.insert(items, cell)
+      if s % 4 == 0 and s < STEPS then table.insert(items, group_spacer()) end
+    end
+    table.insert(oct_rows, vb:row(items))
+  end
+
+  -- PITCH rows (top to bottom: B..C, so highest pitch on top)
+  local pitch_rows = {}
+  for p = 12, 1, -1 do
+    cells.pitch[p] = {}
+    local items = { vb:text { text = PITCH_NAMES[p], width = LABEL_W, font = "mono" } }
+    for s = 1, STEPS do
+      local cell = make_cell(function() toggle_pitch(s, p) end)
+      cells.pitch[p][s] = cell
+      table.insert(items, cell)
+      if s % 4 == 0 and s < STEPS then table.insert(items, group_spacer()) end
+    end
+    table.insert(pitch_rows, vb:row(items))
+  end
+
+  -- SLIDE / ACCENT rows
+  local slide_row  = row_with_cells("SLIDE",  cells.slide,  function(s) return function() toggle_slide(s)  end end)
+  local accent_row = row_with_cells("ACCENT", cells.accent, function(s) return function() toggle_accent(s) end end)
+
+  -- Toolbar -----------------------------------------------------------------
+  hex_view    = vb:multiline_text { width = 16 * (CELL_W + 1) + LABEL_W,
+                                    height = 90, font = "mono" }
+  status_view = vb:text { text = "" }
 
   local midi_outs = renoise.Midi.available_output_devices()
   if #midi_outs == 0 then midi_outs = {"(no MIDI output detected)"} end
-
-  local state = { steps = nil, sysex = nil, last_hash = nil }
-
-  local function refresh()
-    local step_count = PREFS.step_count.value
-    state.steps = read_current_pattern(step_count)
-    local data = td3.encode_data(state.steps, PREFS.triplet.value, step_count)
-    state.sysex = td3.to_sysex(
-      PREFS.group_index.value - 1,
-      PREFS.pattern_index.value - 1,
-      data)
-    preview_view.text = format_preview(state.steps, step_count)
-    hex_view.text     = chunk_hex(state.sysex, 16)
-    local slot = string.format("%s / %s",
-      td3.GROUP_LABELS[PREFS.group_index.value],
-      td3.format_pattern_label(PREFS.pattern_index.value - 1))
-    status_view.text = "Slot cible : " .. slot
-                       .. "  |  SysEx : " .. tostring(#state.sysex) .. " octets"
+  local function find_index(t, v)
+    for i, x in ipairs(t) do if x == v then return i end end
+    return nil
   end
 
-  -- Compute a cheap hash of the relevant Renoise state so the auto-refresh
-  -- timer only redraws when something actually changed.
-  local function pattern_hash()
-    local song = renoise.song()
-    local pat_idx = song.selected_pattern_index
-    local trk_idx = song.selected_track_index
-    local pattern = song:pattern(pat_idx)
-    local track = pattern:track(trk_idx)
-    local parts = { pat_idx, trk_idx, PREFS.step_count.value, PREFS.note_column.value }
-    for i = 1, PREFS.step_count.value do
-      local line = track:line(i)
-      local nc = pick_note_column(line, PREFS.note_column.value)
-      table.insert(parts, (nc and nc.note_value or 121) .. ":" .. (nc and nc.volume_value or 255))
-      for ec = 1, #line.effect_columns do
-        local fx = line.effect_columns[ec]
-        if fx.number_string == "0G" or fx.number_string == "G0" then
-          table.insert(parts, "g" .. ec)
-        end
-      end
-    end
-    return table.concat(parts, "|")
-  end
-
-  local function auto_refresh_tick()
-    if not _dialog or not _dialog.visible then
-      if _auto_refresh_timer and renoise.tool():has_timer(_auto_refresh_timer) then
-        renoise.tool():remove_timer(_auto_refresh_timer)
-      end
-      _auto_refresh_timer = nil
-      return
-    end
-    local h = pattern_hash()
-    if h ~= state.last_hash then
-      state.last_hash = h
-      refresh()
-    end
-  end
-
-  local content = vb:column {
-    margin = 10, spacing = 8,
-    vb:text { text = "Source : pattern + piste sélectionnées dans Renoise.",
-              font = "italic" },
-    vb:row {
-      vb:text { text = "Step count", width = 80 },
-      vb:valuebox { min = 1, max = 16, value = PREFS.step_count.value,
-                    notifier = function(v) PREFS.step_count.value = v; refresh() end },
-      vb:checkbox { value = PREFS.triplet.value,
-                    notifier = function(v) PREFS.triplet.value = v; refresh() end },
-      vb:text { text = "triplet" },
-    },
-    vb:row {
-      vb:text { text = "TD-3 slot", width = 80 },
-      vb:popup { items = group_items(), value = PREFS.group_index.value,
-                 notifier = function(v) PREFS.group_index.value = v; refresh() end },
-      vb:popup { items = pattern_items(), value = PREFS.pattern_index.value,
-                 notifier = function(v) PREFS.pattern_index.value = v; refresh() end },
-    },
-    vb:row {
-      vb:text { text = "Note column", width = 80 },
-      vb:popup {
-        items = { "Auto (1ère non vide)", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12" },
-        value = PREFS.note_column.value + 1,
-        notifier = function(v) PREFS.note_column.value = v - 1; refresh() end,
-      },
-    },
-    vb:row {
-      vb:text { text = "MIDI out", width = 80 },
-      vb:popup { items = midi_outs,
-                 value = math.max(1, find_index(midi_outs, PREFS.midi_out_name.value) or 1),
-                 notifier = function(v) PREFS.midi_out_name.value = midi_outs[v] end },
-    },
-    vb:row {
-      vb:text { text = "Accent ≥ vol", width = 80 },
-      vb:valuebox { min = 1, max = 127, value = PREFS.accent_threshold.value,
-                    notifier = function(v) PREFS.accent_threshold.value = v; refresh() end },
-      vb:text { text = "  Preview vel." },
-      vb:valuebox { min = 1, max = 127, value = PREFS.accent_velocity.value,
-                    notifier = function(v) PREFS.accent_velocity.value = v end },
-      vb:text { text = "  Step ms" },
-      vb:valuebox { min = 20, max = 1000, value = PREFS.preview_step_ms.value,
-                    notifier = function(v) PREFS.preview_step_ms.value = v end },
-    },
-    vb:text { text = "Aperçu steps :", font = "bold" },
-    preview_view,
-    vb:text { text = "SysEx :", font = "bold" },
-    hex_view,
-    status_view,
-    vb:row {
-      vb:button { text = "Rafraîchir depuis Renoise", width = 180,
-                  notifier = refresh },
-      vb:button { text = "Preview audio (Note On/Off)", width = 180,
-        notifier = function()
-          local out = get_midi_out(PREFS.midi_out_name.value)
-          if not out then renoise.app():show_warning("Aucun port MIDI valide.") return end
-          preview_start(state.steps, PREFS.step_count.value,
-                        PREFS.preview_step_ms.value,
-                        PREFS.accent_velocity.value, out)
-        end },
-    },
-    vb:row {
-      vb:button { text = "Stop preview", width = 180, notifier = preview_stop },
-      vb:button { text = "⚠  Write to TD-3 (SysEx)", width = 180,
-        notifier = function()
-          local out = get_midi_out(PREFS.midi_out_name.value)
-          if not out then renoise.app():show_warning("Aucun port MIDI valide.") return end
-          local slot = string.format("%s / %s",
-            td3.GROUP_LABELS[PREFS.group_index.value],
-            td3.format_pattern_label(PREFS.pattern_index.value - 1))
-          local ok = renoise.app():show_prompt("Écrire le pattern ?",
-            "Va écraser le slot " .. slot .. " du TD-3. Continuer ?",
-            { "Écrire", "Annuler" }) == "Écrire"
-          if ok then
-            send_sysex(out, state.sysex)
-            renoise.app():show_status("Pattern envoyé vers " .. slot .. ".")
-          end
-        end },
-    },
+  local toolbar1 = vb:row {
+    vb:text { text = "Slot", width = 40 },
+    vb:popup { items = group_items(), value = PREFS.group_index.value,
+               notifier = function(v) PREFS.group_index.value = v; rebuild_sysex_view() end },
+    vb:popup { items = pattern_items(), value = PREFS.pattern_index.value,
+               notifier = function(v) PREFS.pattern_index.value = v; rebuild_sysex_view() end },
+    vb:checkbox { value = PREFS.triplet.value,
+                  notifier = function(v) PREFS.triplet.value = v; rebuild_sysex_view() end },
+    vb:text { text = "triplet" },
   }
 
-  refresh()
-  state.last_hash = pattern_hash()
+  local toolbar2 = vb:row {
+    vb:text { text = "MIDI out", width = 60 },
+    vb:popup { items = midi_outs,
+               value = math.max(1, find_index(midi_outs, PREFS.midi_out_name.value) or 1),
+               notifier = function(v) PREFS.midi_out_name.value = midi_outs[v] end,
+               width = 200 },
+    vb:text { text = "  Step ms" },
+    vb:valuebox { min = 20, max = 1000, value = PREFS.preview_step_ms.value,
+                  notifier = function(v) PREFS.preview_step_ms.value = v end },
+  }
+
+  local toolbar3 = vb:row {
+    vb:button { text = "Clear", width = 70,
+                notifier = function() state.steps = new_steps(); repaint_all(); on_change() end },
+    vb:button { text = "Import depuis Renoise", width = 170,
+                notifier = function()
+                  import_from_renoise(state.steps, 0x60, -1)
+                  repaint_all(); on_change()
+                end },
+    vb:button { text = "Preview audio", width = 110,
+                notifier = function()
+                  local out = get_midi_out(PREFS.midi_out_name.value)
+                  if not out then renoise.app():show_warning("Aucun port MIDI valide.") return end
+                  local td3_steps = {}
+                  for i = 1, STEPS do td3_steps[i] = step_to_td3(state.steps[i]) end
+                  preview_start(td3_steps, PREFS.preview_step_ms.value,
+                                PREFS.accent_velocity.value, out)
+                end },
+    vb:button { text = "Stop", width = 50, notifier = preview_stop },
+    vb:button { text = "⚠  Write to TD-3", width = 140,
+                notifier = function()
+                  local out = get_midi_out(PREFS.midi_out_name.value)
+                  if not out then renoise.app():show_warning("Aucun port MIDI valide.") return end
+                  local slot = string.format("%s / %s",
+                    td3.GROUP_LABELS[PREFS.group_index.value],
+                    td3.format_pattern_label(PREFS.pattern_index.value - 1))
+                  if renoise.app():show_prompt("Écrire le pattern ?",
+                       "Va écraser le slot " .. slot .. " du TD-3. Continuer ?",
+                       { "Écrire", "Annuler" }) == "Écrire" then
+                    send_sysex(out, state.sysex)
+                    renoise.app():show_status("Pattern envoyé vers " .. slot .. ".")
+                  end
+                end },
+  }
+
+  -- Assemble ----------------------------------------------------------------
+  local content_items = { toolbar1, toolbar2, toolbar3, vb:space { height = 6 } }
+  for _, r in ipairs(oct_rows)   do table.insert(content_items, r) end
+  table.insert(content_items, vb:space { height = 4 })
+  for _, r in ipairs(pitch_rows) do table.insert(content_items, r) end
+  table.insert(content_items, vb:space { height = 4 })
+  table.insert(content_items, slide_row)
+  table.insert(content_items, accent_row)
+  table.insert(content_items, vb:space { height = 6 })
+  table.insert(content_items, hex_view)
+  table.insert(content_items, status_view)
+
+  local content_def = { margin = 8, spacing = 2 }
+  for i, c in ipairs(content_items) do content_def[i] = c end
+  local content = vb:column(content_def)
+
+  repaint_all(); rebuild_sysex_view()
   if _dialog and _dialog.visible then _dialog:close() end
-  _dialog = renoise.app():show_custom_dialog("TD-3 Pattern Export", content)
-  _auto_refresh_timer = auto_refresh_tick
-  renoise.tool():add_timer(_auto_refresh_timer, 400)
+  _dialog = renoise.app():show_custom_dialog("TD-3 Pattern Editor", content)
 end
 
--- ---------------------------------------------------------------------------
--- Menu entries
--- ---------------------------------------------------------------------------
+-- Menu / keybinding registration -------------------------------------------
 
 renoise.tool():add_menu_entry {
-  name   = "Main Menu:Tools:TD-3 Pattern Export...",
+  name   = "Main Menu:Tools:TD-3 Pattern Editor...",
   invoke = show_dialog,
 }
 renoise.tool():add_menu_entry {
-  name   = "Pattern Editor:TD-3 Pattern Export...",
+  name   = "Pattern Editor:TD-3 Pattern Editor...",
   invoke = show_dialog,
 }
 renoise.tool():add_keybinding {
-  name   = "Global:Tools:TD-3 Pattern Export",
+  name   = "Global:Tools:TD-3 Pattern Editor",
   invoke = show_dialog,
 }
