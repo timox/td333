@@ -27,6 +27,7 @@ local PREFS = renoise.Document.create("Td3RenoisePrefs") {
   pattern_index        = 1,    -- 1..16 → 1A..8B
   triplet              = false,
   step_count           = 16,
+  note_column          = 0,    -- 0 = auto (first non-empty), 1..12 = explicit
   accent_threshold     = 0x60, -- volume column ≥ this → accent
   accent_velocity      = 100,
   preview_step_ms      = 125,  -- 1/16 note at 120 BPM
@@ -36,6 +37,21 @@ renoise.tool().preferences = PREFS
 -- ---------------------------------------------------------------------------
 -- Reading the current Renoise pattern
 -- ---------------------------------------------------------------------------
+
+-- Pick the meaningful note column on a given line.
+-- column_pref = 0 → first non-empty column; else use that 1-based index.
+local function pick_note_column(line, column_pref)
+  if column_pref >= 1 then
+    return line.note_columns[column_pref]
+  end
+  for i = 1, #line.note_columns do
+    local c = line.note_columns[i]
+    if c and c.note_value < 121 then  -- 121 = empty in Renoise
+      return c
+    end
+  end
+  return line.note_columns[1]
+end
 
 local function read_current_pattern(step_count)
   local song = renoise.song()
@@ -47,7 +63,7 @@ local function read_current_pattern(step_count)
     local s = { rest = true }
     if i <= step_count then
       local line = track:line(i)
-      local note_col = line.note_columns[1]
+      local note_col = pick_note_column(line, PREFS.note_column.value)
       if note_col and note_col.note_value < 120 then
         -- Renoise note_value 0..119 ↔ MIDI note - 12 ; TD-3 storage = MIDI - 12,
         -- so note_value goes straight into storage with the same clamping.
@@ -251,6 +267,14 @@ local function show_dialog()
                  notifier = function(v) PREFS.group_index.value = v; refresh() end },
       vb:popup { items = pattern_items(), value = PREFS.pattern_index.value,
                  notifier = function(v) PREFS.pattern_index.value = v; refresh() end },
+    },
+    vb:row {
+      vb:text { text = "Note column", width = 80 },
+      vb:popup {
+        items = { "Auto (1ère non vide)", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12" },
+        value = PREFS.note_column.value + 1,
+        notifier = function(v) PREFS.note_column.value = v - 1; refresh() end,
+      },
     },
     vb:row {
       vb:text { text = "MIDI out", width = 80 },
