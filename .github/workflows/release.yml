@@ -1,0 +1,77 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Nouvelle version (semver, ex. 0.2.0)"
+        required: true
+        type: string
+      draft:
+        description: "Créer la release en draft"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Sanity-check the version string
+        run: |
+          if ! [[ "${{ inputs.version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.+-]+)?$ ]]; then
+            echo "::error::version '${{ inputs.version }}' is not semver"
+            exit 1
+          fi
+          if git rev-parse "v${{ inputs.version }}" >/dev/null 2>&1; then
+            echo "::error::tag v${{ inputs.version }} already exists"
+            exit 1
+          fi
+
+      - name: Bump xrnx manifest version
+        run: |
+          file="renoise/com.timox.td3-renoise.xrnx/manifest.xml"
+          sed -i -E "s|<Version>[^<]*</Version>|<Version>${{ inputs.version }}</Version>|" "$file"
+          grep -q "<Version>${{ inputs.version }}</Version>" "$file"
+
+      - name: Bump Python project version
+        run: |
+          file="pyproject.toml"
+          sed -i -E "s|^version *=.*$|version = \"${{ inputs.version }}\"|" "$file"
+          grep -q "^version = \"${{ inputs.version }}\"$" "$file"
+
+      - name: Build the .xrnx archive
+        id: build
+        run: |
+          out="td3-renoise-v${{ inputs.version }}.xrnx"
+          cd renoise/com.timox.td3-renoise.xrnx
+          zip -r "../../$out" . -x "*.DS_Store"
+          cd ../..
+          ls -la "$out"
+          echo "xrnx_path=$out" >> "$GITHUB_OUTPUT"
+
+      - name: Commit version bump and tag
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add renoise/com.timox.td3-renoise.xrnx/manifest.xml pyproject.toml
+          git commit -m "release v${{ inputs.version }}"
+          git tag -a "v${{ inputs.version }}" -m "v${{ inputs.version }}"
+          git push origin HEAD
+          git push origin "v${{ inputs.version }}"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v${{ inputs.version }}"
+          name: "v${{ inputs.version }}"
+          draft: ${{ inputs.draft }}
+          generate_release_notes: true
+          files: ${{ steps.build.outputs.xrnx_path }}
