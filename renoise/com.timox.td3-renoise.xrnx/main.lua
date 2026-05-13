@@ -39,6 +39,8 @@ local PREFS = renoise.Document.create("Td3RenoisePrefs") {
   normal_velocity      = 80,
   accent_velocity      = 100,
   preview_step_ms      = 125,  -- 1/16 note at 120 BPM
+  loop                 = false,
+  sync_bpm             = true, -- override step_ms with Renoise BPM
   filter_cutoff        = 64,   -- CC 74 last value
   -- Pattern state is persisted as a flat string of 16 step records:
   --   "o:s:a:l" per step, joined by ";". o ∈ 0..4 (0=rest), s ∈ 0..12 (1..12
@@ -190,28 +192,33 @@ local function preview_stop()
   _preview_state = nil
 end
 
-local function preview_start(steps, step_ms, normal_vel, accent_vel, out)
+local function preview_start(steps, step_ms, normal_vel, accent_vel, loop, out)
   preview_stop()
-  _preview_state = { out = out, step = 0, last_note = nil, steps = steps }
+  _preview_state = { out = out, step = 0, last_note = nil, steps = steps,
+                     loop = loop }
   _preview_timer = function()
     local st = _preview_state
     if not st then return end
     if st.step >= STEPS then
-      -- Close out the trailing note before stopping.
-      if st.last_note then
-        send_short(st.out, 0x80, st.last_note, 0x40); st.last_note = nil
+      if st.loop then
+        st.step = 0  -- restart in place; never release between loops to
+                     -- support patterns that chain a slide at the wrap
+      else
+        if st.last_note then
+          send_short(st.out, 0x80, st.last_note, 0x40); st.last_note = nil
+        end
+        preview_stop(); return
       end
-      preview_stop(); return
     end
     local s = st.steps[st.step + 1]
     if s and not s.rest and s.pitch then
       local midi = td3.storage_to_midi(s.pitch)
       local vel  = s.accent and accent_vel or normal_vel
       if s.slide and st.last_note then
-        -- Slide / legato : new Note ON BEFORE the previous Note OFF so the
-        -- TD-3 detects an overlap and triggers its portamento.
+        -- Slide / legato : send the new Note ON WITHOUT releasing the
+        -- previous one. The TD-3 in mono mode interprets the overlapping
+        -- Note ON as a portamento glide and keeps the gate open.
         send_short(st.out, 0x90, midi, vel)
-        send_short(st.out, 0x80, st.last_note, 0x40)
       else
         if st.last_note then
           send_short(st.out, 0x80, st.last_note, 0x40)
@@ -220,7 +227,7 @@ local function preview_start(steps, step_ms, normal_vel, accent_vel, out)
       end
       st.last_note = midi
     else
-      -- Rest: cut the previous note if any.
+      -- Rest : explicitly release the running note.
       if st.last_note then
         send_short(st.out, 0x80, st.last_note, 0x40); st.last_note = nil
       end
@@ -457,16 +464,28 @@ local function show_dialog()
                   import_from_renoise(state.steps, 0x60, -1)
                   repaint_all(); on_change()
                 end },
-    vb:button { text = "Preview audio", width = 110,
+    vb:button { text = "Preview ▶", width = 90,
                 notifier = function()
                   local out = get_midi_out(PREFS.midi_out_name.value)
                   if not out then renoise.app():show_warning("Aucun port MIDI valide.") return end
                   local td3_steps = {}
                   for i = 1, STEPS do td3_steps[i] = step_to_td3(state.steps[i]) end
-                  preview_start(td3_steps, PREFS.preview_step_ms.value,
+                  local step_ms = PREFS.preview_step_ms.value
+                  if PREFS.sync_bpm.value then
+                    -- 1/16 note duration in ms, from Renoise's current BPM.
+                    step_ms = math.floor(15000 / renoise.song().transport.bpm + 0.5)
+                  end
+                  preview_start(td3_steps, step_ms,
                                 PREFS.normal_velocity.value,
-                                PREFS.accent_velocity.value, out)
+                                PREFS.accent_velocity.value,
+                                PREFS.loop.value, out)
                 end },
+    vb:checkbox { value = PREFS.loop.value,
+                  notifier = function(v) PREFS.loop.value = v end },
+    vb:text { text = "loop" },
+    vb:checkbox { value = PREFS.sync_bpm.value,
+                  notifier = function(v) PREFS.sync_bpm.value = v end },
+    vb:text { text = "sync BPM" },
     vb:button { text = "Stop", width = 50, notifier = preview_stop },
     vb:button { text = "⚠  Write to TD-3", width = 140,
                 notifier = function()
