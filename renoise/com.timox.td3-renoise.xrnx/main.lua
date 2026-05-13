@@ -40,6 +40,7 @@ local PREFS = renoise.Document.create("Td3RenoisePrefs") {
   normal_velocity      = 80,
   accent_velocity      = 100,
   preview_step_ms      = 125,  -- 1/16 note at 120 BPM
+  step_rate_index      = 3,    -- 1..5 → 1/4, 1/8, 1/16, 1/32, 1/64
   loop                 = false,
   sync_bpm             = true, -- override step_ms with Renoise BPM
   filter_cutoff        = 64,   -- CC 74 last value
@@ -230,6 +231,20 @@ end
 
 local CLOCK_SRC  = {"Internal", "MIDI DIN", "MIDI USB", "Trigger"}
 local KEY_PRIO   = {"Low", "High", "Last"}
+
+-- Step rate options: each step lasts the given musical subdivision when
+-- syncing to Renoise's BPM. step_ms = 15000 / (BPM × mult).
+-- mult = 1 → step = 1/16 (default). mult = 2 → step = 1/32 (twice as fast).
+-- The 16-step pattern then spans 4 quarters (at 1/16), 2 quarters (at 1/32),
+-- or 8 quarters (at 1/8), etc. — always synced, just at a finer or coarser
+-- subdivision than Renoise's row grid.
+local STEP_RATES = {
+  { label = "1/4 ×0.25", mult = 0.25 },
+  { label = "1/8 ×0.5",  mult = 0.5  },
+  { label = "1/16 ×1",   mult = 1    },
+  { label = "1/32 ×2",   mult = 2    },
+  { label = "1/64 ×4",   mult = 4    },
+}
 
 --- Send the SysEx "Set clock source" (opcode 0x1B). Returns true on success.
 local function set_clock_source(value)
@@ -742,8 +757,8 @@ local function show_dialog()
                   if not out then renoise.app():show_warning("Aucun port MIDI valide.") return end
                   local step_ms = PREFS.preview_step_ms.value
                   if PREFS.sync_bpm.value then
-                    -- 1/16 note duration in ms, from Renoise's current BPM.
-                    step_ms = math.floor(15000 / renoise.song().transport.bpm + 0.5)
+                    local rate = STEP_RATES[PREFS.step_rate_index.value] or STEP_RATES[3]
+                    step_ms = math.floor(15000 / (renoise.song().transport.bpm * rate.mult) + 0.5)
                   end
                   -- Closure : la boucle relit l'état courant à chaque step,
                   -- les modifs en grille sont prises en compte sans Stop.
@@ -759,6 +774,13 @@ local function show_dialog()
     vb:checkbox { value = PREFS.sync_bpm.value,
                   notifier = function(v) PREFS.sync_bpm.value = v end },
     vb:text { text = "sync BPM" },
+    vb:text { text = "  step =" },
+    vb:popup {
+      items = (function() local t = {} for _, r in ipairs(STEP_RATES) do table.insert(t, r.label) end return t end)(),
+      value = PREFS.step_rate_index.value,
+      notifier = function(v) PREFS.step_rate_index.value = v end,
+      width = 90,
+    },
     vb:button { text = "Stop", width = 50, notifier = preview_stop },
     vb:button { text = "⚠  Write to TD-3", width = 140,
                 notifier = function()
