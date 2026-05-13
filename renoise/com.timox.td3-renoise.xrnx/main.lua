@@ -35,6 +35,7 @@ local PREFS = renoise.Document.create("Td3RenoisePrefs") {
   group_index          = 1,    -- 1..4 → I..IV
   pattern_index        = 1,    -- 1..16 → 1A..8B
   triplet              = false,
+  normal_velocity      = 80,
   accent_velocity      = 100,
   preview_step_ms      = 125,  -- 1/16 note at 120 BPM
   -- Pattern state is persisted as a flat string of 16 step records:
@@ -187,23 +188,40 @@ local function preview_stop()
   _preview_state = nil
 end
 
-local function preview_start(steps, step_ms, accent_velocity, out)
+local function preview_start(steps, step_ms, normal_vel, accent_vel, out)
   preview_stop()
   _preview_state = { out = out, step = 0, last_note = nil, steps = steps }
   _preview_timer = function()
     local st = _preview_state
     if not st then return end
-    if st.last_note then
-      send_short(st.out, 0x80, st.last_note, 0x40)
-      st.last_note = nil
+    if st.step >= STEPS then
+      -- Close out the trailing note before stopping.
+      if st.last_note then
+        send_short(st.out, 0x80, st.last_note, 0x40); st.last_note = nil
+      end
+      preview_stop(); return
     end
-    if st.step >= STEPS then preview_stop(); return end
     local s = st.steps[st.step + 1]
     if s and not s.rest and s.pitch then
       local midi = td3.storage_to_midi(s.pitch)
-      local vel  = s.accent and accent_velocity or 80
-      send_short(st.out, 0x90, midi, vel)
+      local vel  = s.accent and accent_vel or normal_vel
+      if s.slide and st.last_note then
+        -- Slide / legato : new Note ON BEFORE the previous Note OFF so the
+        -- TD-3 detects an overlap and triggers its portamento.
+        send_short(st.out, 0x90, midi, vel)
+        send_short(st.out, 0x80, st.last_note, 0x40)
+      else
+        if st.last_note then
+          send_short(st.out, 0x80, st.last_note, 0x40)
+        end
+        send_short(st.out, 0x90, midi, vel)
+      end
       st.last_note = midi
+    else
+      -- Rest: cut the previous note if any.
+      if st.last_note then
+        send_short(st.out, 0x80, st.last_note, 0x40); st.last_note = nil
+      end
     end
     st.step = st.step + 1
   end
@@ -395,6 +413,12 @@ local function show_dialog()
     vb:text { text = "  Step ms" },
     vb:valuebox { min = 20, max = 1000, value = PREFS.preview_step_ms.value,
                   notifier = function(v) PREFS.preview_step_ms.value = v end },
+    vb:text { text = "  Vel" },
+    vb:valuebox { min = 1, max = 127, value = PREFS.normal_velocity.value,
+                  notifier = function(v) PREFS.normal_velocity.value = v end },
+    vb:text { text = "/ acc" },
+    vb:valuebox { min = 1, max = 127, value = PREFS.accent_velocity.value,
+                  notifier = function(v) PREFS.accent_velocity.value = v end },
   }
 
   local toolbar3 = vb:row {
@@ -412,6 +436,7 @@ local function show_dialog()
                   local td3_steps = {}
                   for i = 1, STEPS do td3_steps[i] = step_to_td3(state.steps[i]) end
                   preview_start(td3_steps, PREFS.preview_step_ms.value,
+                                PREFS.normal_velocity.value,
                                 PREFS.accent_velocity.value, out)
                 end },
     vb:button { text = "Stop", width = 50, notifier = preview_stop },
