@@ -23,8 +23,11 @@ jobs:
         run: |
           tag="${GITHUB_REF#refs/tags/}"
           version="${tag#v}"
-          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::tag '$tag' is not vX.Y.Z"
+          # Renoise's <Version> field requires a parseable float (the
+          # official ExampleTool uses "1.2"); we accept either "X.Y" or
+          # "X.Y.Z" tags and pass the string through unchanged.
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "::error::tag '$tag' must be vX.Y or vX.Y.Z"
             exit 1
           fi
           echo "tag=$tag"         >> "$GITHUB_OUTPUT"
