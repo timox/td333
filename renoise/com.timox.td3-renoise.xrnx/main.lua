@@ -342,10 +342,10 @@ local function preview_stop()
   _preview_state = nil
 end
 
-local function preview_start(steps, step_ms, normal_vel, accent_vel, loop, out)
+local function preview_start(get_step, step_ms, normal_vel, accent_vel, loop, out)
   preview_stop()
-  _preview_state = { out = out, step = 0, last_note = nil, steps = steps,
-                     loop = loop }
+  _preview_state = { out = out, step = 0, last_note = nil,
+                     get_step = get_step, loop = loop }
   _preview_timer = function()
     local st = _preview_state
     if not st then return end
@@ -360,7 +360,7 @@ local function preview_start(steps, step_ms, normal_vel, accent_vel, loop, out)
         preview_stop(); return
       end
     end
-    local s = st.steps[st.step + 1]
+    local s = st.get_step(st.step + 1)  -- live read each tick
     if s and not s.rest and s.pitch then
       local midi = td3.storage_to_midi(s.pitch)
       local vel  = s.accent and accent_vel or normal_vel
@@ -630,14 +630,15 @@ local function show_dialog()
                 notifier = function()
                   local out = get_midi_out(PREFS.midi_out_name.value)
                   if not out then renoise.app():show_warning("Aucun port MIDI valide.") return end
-                  local td3_steps = {}
-                  for i = 1, STEPS do td3_steps[i] = step_to_td3(state.steps[i]) end
                   local step_ms = PREFS.preview_step_ms.value
                   if PREFS.sync_bpm.value then
                     -- 1/16 note duration in ms, from Renoise's current BPM.
                     step_ms = math.floor(15000 / renoise.song().transport.bpm + 0.5)
                   end
-                  preview_start(td3_steps, step_ms,
+                  -- Closure : la boucle relit l'état courant à chaque step,
+                  -- les modifs en grille sont prises en compte sans Stop.
+                  local function read_step(i) return step_to_td3(state.steps[i]) end
+                  preview_start(read_step, step_ms,
                                 PREFS.normal_velocity.value,
                                 PREFS.accent_velocity.value,
                                 PREFS.loop.value, out)
