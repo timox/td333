@@ -32,11 +32,14 @@ local COLOR_GROUP = {0x55, 0x55, 0x55}   -- group separator
 
 local PREFS = renoise.Document.create("Td3RenoisePrefs") {
   midi_out_name        = "",
+  midi_channel         = 1,    -- 1..16
   group_index          = 1,    -- 1..4 → I..IV
   pattern_index        = 1,    -- 1..16 → 1A..8B
   triplet              = false,
+  normal_velocity      = 80,
   accent_velocity      = 100,
   preview_step_ms      = 125,  -- 1/16 note at 120 BPM
+  filter_cutoff        = 64,   -- CC 74 last value
   -- Pattern state is persisted as a flat string of 16 step records:
   --   "o:s:a:l" per step, joined by ";". o ∈ 0..4 (0=rest), s ∈ 0..12 (1..12
   --   for C..B), a/l ∈ 0/1.
@@ -168,8 +171,15 @@ local function send_sysex(out, msg)
   end
 end
 
-local function send_short(out, status, d1, d2)
-  out:send { status, d1, d2 }
+-- All channel-voice messages use the user-selected MIDI channel (1..16).
+-- `status_nibble` is the high nibble: 0x80=Note Off, 0x90=Note On, 0xB0=CC, etc.
+local function send_short(out, status_nibble, d1, d2)
+  local ch = (PREFS.midi_channel.value - 1) % 16
+  out:send { status_nibble + ch, d1, d2 }
+end
+
+local function send_cc(out, cc, value)
+  send_short(out, 0xB0, cc, math.max(0, math.min(127, value)))
 end
 
 -- Preview audio --------------------------------------------------------------
@@ -187,23 +197,40 @@ local function preview_stop()
   _preview_state = nil
 end
 
-local function preview_start(steps, step_ms, accent_velocity, out)
+local function preview_start(steps, step_ms, normal_vel, accent_vel, out)
   preview_stop()
   _preview_state = { out = out, step = 0, last_note = nil, steps = steps }
   _preview_timer = function()
     local st = _preview_state
     if not st then return end
-    if st.last_note then
-      send_short(st.out, 0x80, st.last_note, 0x40)
-      st.last_note = nil
+    if st.step >= STEPS then
+      -- Close out the trailing note before stopping.
+      if st.last_note then
+        send_short(st.out, 0x80, st.last_note, 0x40); st.last_note = nil
+      end
+      preview_stop(); return
     end
-    if st.step >= STEPS then preview_stop(); return end
     local s = st.steps[st.step + 1]
     if s and not s.rest and s.pitch then
       local midi = td3.storage_to_midi(s.pitch)
-      local vel  = s.accent and accent_velocity or 80
-      send_short(st.out, 0x90, midi, vel)
+      local vel  = s.accent and accent_vel or normal_vel
+      if s.slide and st.last_note then
+        -- Slide / legato : new Note ON BEFORE the previous Note OFF so the
+        -- TD-3 detects an overlap and triggers its portamento.
+        send_short(st.out, 0x90, midi, vel)
+        send_short(st.out, 0x80, st.last_note, 0x40)
+      else
+        if st.last_note then
+          send_short(st.out, 0x80, st.last_note, 0x40)
+        end
+        send_short(st.out, 0x90, midi, vel)
+      end
       st.last_note = midi
+    else
+      -- Rest: cut the previous note if any.
+      if st.last_note then
+        send_short(st.out, 0x80, st.last_note, 0x40); st.last_note = nil
+      end
     end
     st.step = st.step + 1
   end
@@ -392,9 +419,41 @@ local function show_dialog()
                value = math.max(1, find_index(midi_outs, PREFS.midi_out_name.value) or 1),
                notifier = function(v) PREFS.midi_out_name.value = midi_outs[v] end,
                width = 200 },
+    vb:text { text = "  Ch" },
+    vb:valuebox { min = 1, max = 16, value = PREFS.midi_channel.value,
+                  notifier = function(v) PREFS.midi_channel.value = v end },
     vb:text { text = "  Step ms" },
     vb:valuebox { min = 20, max = 1000, value = PREFS.preview_step_ms.value,
                   notifier = function(v) PREFS.preview_step_ms.value = v end },
+    vb:text { text = "  Vel" },
+    vb:valuebox { min = 1, max = 127, value = PREFS.normal_velocity.value,
+                  notifier = function(v) PREFS.normal_velocity.value = v end },
+    vb:text { text = "/ acc" },
+    vb:valuebox { min = 1, max = 127, value = PREFS.accent_velocity.value,
+                  notifier = function(v) PREFS.accent_velocity.value = v end },
+  }
+
+  -- Live filter cutoff (CC 74) — the only sound-shaping CC officially
+  -- documented for the TD-3. Slider sends a CC message as you drag it.
+  local cutoff_value_view = vb:text { text = tostring(PREFS.filter_cutoff.value), width = 28 }
+  local toolbar_cutoff = vb:row {
+    vb:text { text = "Cutoff (CC 74)", width = 100 },
+    vb:slider {
+      min = 0, max = 127, value = PREFS.filter_cutoff.value, width = 240,
+      notifier = function(v)
+        local iv = math.floor(v + 0.5)
+        PREFS.filter_cutoff.value = iv
+        cutoff_value_view.text = tostring(iv)
+        local out = get_midi_out(PREFS.midi_out_name.value)
+        if out then send_cc(out, 0x4A, iv) end
+      end,
+    },
+    cutoff_value_view,
+    vb:button { text = "Send", width = 60,
+                notifier = function()
+                  local out = get_midi_out(PREFS.midi_out_name.value)
+                  if out then send_cc(out, 0x4A, PREFS.filter_cutoff.value) end
+                end },
   }
 
   local toolbar3 = vb:row {
@@ -412,6 +471,7 @@ local function show_dialog()
                   local td3_steps = {}
                   for i = 1, STEPS do td3_steps[i] = step_to_td3(state.steps[i]) end
                   preview_start(td3_steps, PREFS.preview_step_ms.value,
+                                PREFS.normal_velocity.value,
                                 PREFS.accent_velocity.value, out)
                 end },
     vb:button { text = "Stop", width = 50, notifier = preview_stop },
@@ -432,7 +492,7 @@ local function show_dialog()
   }
 
   -- Assemble ----------------------------------------------------------------
-  local content_items = { toolbar1, toolbar2, toolbar3, vb:space { height = 6 } }
+  local content_items = { toolbar1, toolbar2, toolbar_cutoff, toolbar3, vb:space { height = 6 } }
   for _, r in ipairs(oct_rows)   do table.insert(content_items, r) end
   table.insert(content_items, vb:space { height = 4 })
   for _, r in ipairs(pitch_rows) do table.insert(content_items, r) end

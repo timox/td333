@@ -146,6 +146,45 @@ def send(yaml_path: Path, port: str) -> None:
     click.echo(f"sent pattern {_GROUP_LETTERS[p.group]}{p.number + 1:02d} to {target!r}")
 
 
+@main.command()
+@click.option("--port", required=True, help="Nom du port MIDI d'entrée (loopMIDI/IAC pour intercepter Synthtribe).")
+@click.option("--timeout", default=8.0, show_default=True, help="Délai max en secondes par contrôle.")
+@click.option("--out", "out_path", type=click.Path(dir_okay=False, path_type=Path),
+              default=Path("td3_cc_map.json"), show_default=True,
+              help="Fichier JSON de sortie.")
+def sniff(port: str, timeout: float, out_path: Path) -> None:
+    """Capture passive : on écoute ce qui arrive sur un port MIDI pendant que vous touchez chaque contrôle d'une source (Synthtribe, Reaktor, etc.).
+
+    Setup type :
+        Synthtribe → loopMIDI virtuel → ce sniffer → TD-3 (optionnel)
+
+    Limites : Synthtribe ne transmet pas vraiment de CC pour le timbre.
+    Utiliser plutôt `td3 probe` pour piloter activement la TD-3 et écouter.
+    """
+    _require_mido()
+    from .sniff import run_sniffer, summarise
+    captures = run_sniffer(port, timeout_s=timeout, out_path=out_path)
+    summarise(captures)
+
+
+@main.command()
+@click.option("--port", required=True, help="Port MIDI de sortie vers la TD-3.")
+@click.option("--channel", default=1, show_default=True, help="Canal MIDI (1..16).")
+@click.option("--start", default=0, show_default=True, help="Premier numéro de CC à tester.")
+@click.option("--end",   default=127, show_default=True, help="Dernier numéro de CC à tester.")
+@click.option("--out", "out_path", type=click.Path(dir_okay=False, path_type=Path),
+              default=Path("td3_cc_discovered.json"), show_default=True)
+def probe(port: str, channel: int, start: int, end: int, out_path: Path) -> None:
+    """Active probe : envoie CC 0..127 sur la TD-3 et vous demande après chaque envoi si vous entendez un changement.
+
+    Conseil : maintenir une note ou lancer une pattern simple sur la TD-3
+    pour mieux entendre l'effet de chaque CC.
+    """
+    _require_mido()
+    from .sniff import run_active_probe
+    run_active_probe(port, cc_range=(start, end), channel=channel, out_path=out_path)
+
+
 @main.command(name="send-all")
 @click.argument("yaml_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
 @click.option("--port", required=True)

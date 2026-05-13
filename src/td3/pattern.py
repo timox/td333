@@ -17,10 +17,27 @@ reference and the beholder-d/td3-pattern project on GitHub:
     0x68     4    hold mask   (low-nibble layout 7654/3210/FEDC/BA98)
     0x6C     4    rest mask   (same low-nibble layout)
 
-Pitches / accent / slide are INDEXED BY STEP (entry i corresponds to step i).
-Rest mask separately marks which steps are silenced; the stored pitch for a
-rest step is preserved verbatim (typically 0x18 when the slot was never
-programmed, but can be any value — for example from a previous edit).
+Pitches / accent / slide are currently treated as INDEXED BY STEP (entry i
+corresponds to step i). Rest mask separately marks which steps are
+silenced; the stored pitch for a rest step is preserved verbatim (typically
+0x18 when the slot was never programmed, but can be any value — for example
+from a previous edit).
+
+⚠️ Open question / TODO: the beholder-d/td3-pattern project notes that on
+the TD-3 firmware, "Note/Transpose/Accent/Slide advance differently than
+Tie/Rest when entering a pattern", which strongly suggests the firmware
+actually uses a PACKED model — pitches[0..N-1] are the active notes in
+playing order (N = step_count − rest count), and the rest mask alone
+positions silences inside the 16 steps. The factory dump td3dump.sqs is
+consistent with this: pattern 0/0 has 9 real pitches at the start of the
+buffer followed by 7 0x18 placeholders, while the rest mask scatters 7
+rests across the 16 steps.
+
+Round-trip of factory data is byte-exact under either model because we
+both read and write the same bytes; the semantic discrepancy only shows up
+when *creating* a new pattern with rests in the middle. To finalise the
+correct model, send a synthetic pattern with a single rest mid-row and
+listen to which step actually plays the next note on hardware.
 
 Hold mask uses INVERTED semantics: bit set (1) = normal note, bit clear (0) =
 held / tied to the previous step (the TD-3 firmware ignores the held step's
