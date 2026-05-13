@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "td3"
+version = "0.1.0"
+description = "Behringer TD-3 pattern editor: .sqs / SysEx / YAML round-trip"
+requires-python = ">=3.10"
+dependencies = [
+  "click>=8",
+  "PyYAML>=6",
+]
+
+[project.optional-dependencies]
+midi = ["mido>=1.3", "python-rtmidi>=1.5"]
+dev  = ["pytest>=7"]
+
+[project.scripts]
+td3 = "td3.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
