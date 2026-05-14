@@ -563,6 +563,45 @@ local function show_dialog()
     for i = 1, STEPS do repaint_step(i) end
   end
 
+  -- Two preview launchers: immediate or aligned to Renoise's next pattern
+  -- boundary. Sync=line 0 of the playing pattern. With Renoise's sample
+  -- recorder set to Sync=Pattern at the same time, the take starts in phase.
+  local function launch_preview(synced)
+    local out = get_midi_out(PREFS.midi_out_name.value)
+    if not out then renoise.app():show_warning("Aucun port MIDI valide.") return end
+    local step_ms = PREFS.preview_step_ms.value
+    if PREFS.sync_bpm.value then
+      local rate = STEP_RATES[PREFS.step_rate_index.value] or STEP_RATES[3]
+      step_ms = math.floor(15000 / (renoise.song().transport.bpm * rate.mult) + 0.5)
+    end
+    local function read_step(i) return step_to_td3(state.steps[i]) end
+    local function go()
+      preview_start(read_step, step_ms,
+                    PREFS.normal_velocity.value,
+                    PREFS.accent_velocity.value,
+                    PREFS.loop.value, out)
+    end
+    if not synced or not renoise.song().transport.playing then
+      go(); return
+    end
+    -- Wait until Renoise's playback_pos wraps to line 0 of its current
+    -- pattern, then fire. Tight polling timer (10 ms) gives a worst-case
+    -- alignment of one Renoise pattern row.
+    renoise.app():show_status("TD-3 preview en attente du prochain pattern Renoise...")
+    local poll
+    poll = function()
+      if not renoise.song().transport.playing then
+        if renoise.tool():has_timer(poll) then renoise.tool():remove_timer(poll) end
+        go(); return
+      end
+      if renoise.song().transport.playback_pos.line == 1 then  -- Renoise lines are 1-based
+        if renoise.tool():has_timer(poll) then renoise.tool():remove_timer(poll) end
+        go()
+      end
+    end
+    renoise.tool():add_timer(poll, 10)
+  end
+
   local function on_change()
     persist(); rebuild_sysex_view()
   end
@@ -764,23 +803,11 @@ local function show_dialog()
                   import_from_renoise(state.steps, 0x60, -1)
                   repaint_all(); on_change()
                 end },
-    vb:button { text = "Preview ▶", width = 90,
-                notifier = function()
-                  local out = get_midi_out(PREFS.midi_out_name.value)
-                  if not out then renoise.app():show_warning("Aucun port MIDI valide.") return end
-                  local step_ms = PREFS.preview_step_ms.value
-                  if PREFS.sync_bpm.value then
-                    local rate = STEP_RATES[PREFS.step_rate_index.value] or STEP_RATES[3]
-                    step_ms = math.floor(15000 / (renoise.song().transport.bpm * rate.mult) + 0.5)
-                  end
-                  -- Closure : la boucle relit l'état courant à chaque step,
-                  -- les modifs en grille sont prises en compte sans Stop.
-                  local function read_step(i) return step_to_td3(state.steps[i]) end
-                  preview_start(read_step, step_ms,
-                                PREFS.normal_velocity.value,
-                                PREFS.accent_velocity.value,
-                                PREFS.loop.value, out)
-                end },
+    vb:button { text = "▶ Preview", width = 90,
+                notifier = function() launch_preview(false) end },
+    vb:button { text = "▶ Sync",    width = 70,
+                notifier = function() launch_preview(true) end,
+                tooltip = "Attend la prochaine frontière de pattern Renoise avant de lancer le loop. À coupler avec Sample Recorder en Sync=Pattern pour une prise calée." },
     vb:checkbox { value = PREFS.loop.value,
                   notifier = function(v) PREFS.loop.value = v end },
     vb:text { text = "loop" },
