@@ -587,6 +587,21 @@ local function show_dialog()
     pcall(function() renoise.song().transport:stop_sample_recording() end)
   end
 
+  -- Try to select the TD-3 internal slot via standard MIDI Program Change.
+  -- Behringer doesn't document this but many TB-303 clones accept PC for
+  -- pattern selection. PC value = group*16 + pattern (0..63).
+  local function send_program_change_for_slot()
+    local out = get_midi_out(PREFS.midi_out_name.value)
+    if not out then renoise.app():show_warning("Pas de port MIDI OUT.") return end
+    local ch   = (PREFS.midi_channel.value - 1) % 16
+    local slot = (PREFS.group_index.value - 1) * 16 + (PREFS.pattern_index.value - 1)
+    out:send { 0xC0 + ch, slot }
+    renoise.app():show_status(string.format(
+      "Program Change %d envoyé (slot %s/%s) — non documenté, à vérifier à l'oreille.",
+      slot, td3.GROUP_LABELS[PREFS.group_index.value],
+      td3.format_pattern_label(PREFS.pattern_index.value - 1)))
+  end
+
   -- Two preview launchers: immediate or aligned to Renoise's next pattern
   -- boundary. Sync=line 0 of the playing pattern.
   local function launch_preview(synced)
@@ -850,6 +865,9 @@ local function show_dialog()
                 notifier = function()
                   if start_recording() then launch_preview(true) end
                 end },
+    vb:button { text = "Sel slot", width = 70,
+                tooltip = "Envoie un Program Change pour sélectionner le slot courant sur la TD-3. Mode A : la TD-3 jouera ce slot quand elle reçoit MIDI Start. PC non documenté par Behringer — à tester.",
+                notifier = send_program_change_for_slot },
     vb:checkbox { value = PREFS.loop.value,
                   notifier = function(v) PREFS.loop.value = v end },
     vb:text { text = "loop" },
