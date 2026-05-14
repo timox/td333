@@ -481,10 +481,18 @@ local function preview_start(get_step, step_ms, normal_vel, accent_vel, loop, ou
       local midi = td3.storage_to_midi(s.pitch)
       local vel  = s.accent and accent_vel or normal_vel
       if s.slide and #st.active_notes > 0 then
-        -- Slide / legato : on empile sans relâcher. Le gate reste ouvert,
-        -- la TD-3 fait son portamento sur la nouvelle note.
-        send_short(st.out, 0x90, midi, vel)
-        table.insert(st.active_notes, midi)
+        local last = st.active_notes[#st.active_notes]
+        if midi == last then
+          -- Slide vers la même tonalité : pas de glissement, pas de
+          -- retrigger d'enveloppe attendu (= effet "tied note" / sustain
+          -- TB-303). On n'envoie aucun Note On pour éviter que la TD-3
+          -- ne re-déclenche l'enveloppe.
+        else
+          -- Slide / legato vers une nouvelle pitch : Note On empilé sans
+          -- relâcher. Gate ouvert, portamento jusqu'à la nouvelle pitch.
+          send_short(st.out, 0x90, midi, vel)
+          table.insert(st.active_notes, midi)
+        end
       else
         -- Step non-slide : libère TOUT (chaîne de slides précédente
         -- incluse), puis attaque la nouvelle note proprement.
