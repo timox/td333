@@ -143,7 +143,7 @@ def send(yaml_path: Path, port: str) -> None:
     msg = mido.Message.from_bytes(pattern_to_sysex(p))
     with mido.open_output(target) as out:
         out.send(msg)
-    click.echo(f"sent pattern {_GROUP_LETTERS[p.group]}{p.number + 1:02d} to {target!r}")
+    click.echo(f"sent pattern {_GROUP_LABELS[p.group]}-{format_pattern_label(p.number)} to {target!r}")
 
 
 @main.command()
