@@ -168,6 +168,24 @@ def sniff(port: str, timeout: float, out_path: Path) -> None:
 
 
 @main.command()
+@click.option("--port", required=True, help="Port MIDI d'entrée à écouter (port loopback virtuel par ex.).")
+@click.option("--forward-to", default=None, help="Port MIDI de sortie où relayer chaque message reçu (passthrough).")
+@click.option("--clock", is_flag=True, default=False, help="Afficher aussi les Timing Clock (sinon filtrés).")
+def monitor(port: str, forward_to: str | None, clock: bool) -> None:
+    """Moniteur passif : affiche tout ce qui arrive sur un port MIDI, avec timestamps.
+
+    Setup typique sur Windows pour sniffer Synthtribe :
+        1. loopMIDI (gratuit) → créer un port virtuel "TD-3-Sniff"
+        2. Synthtribe → MIDI Out = "TD-3-Sniff"
+        3. td3 monitor --port "TD-3-Sniff" --forward-to "TD-3 MIDI 1"
+        4. Tout ce que Synthtribe envoie est affiché ET relayé à la TD-3.
+    """
+    _require_mido()
+    from .sniff import run_monitor
+    run_monitor(port, forward_to=forward_to, show_clock=clock)
+
+
+@main.command()
 @click.option("--port", required=True, help="Port MIDI de sortie vers la TD-3.")
 @click.option("--channel", default=1, show_default=True, help="Canal MIDI (1..16).")
 @click.option("--start", default=0, show_default=True, help="Premier numéro de CC à tester.")

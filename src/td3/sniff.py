@@ -197,6 +197,41 @@ def summarise(captures: list[CaptureResult]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Passive monitor : dump every incoming MIDI message, optionally forward.
+# Useful for sniffing Synthtribe ↔ TD-3 traffic via a virtual loopback port.
+# ---------------------------------------------------------------------------
+
+def run_monitor(port_name: str, forward_to: str | None = None,
+                show_clock: bool = False) -> None:
+    mido = _ensure_mido()
+    fwd = mido.open_output(forward_to) if forward_to else None
+    print(f"Écoute sur : {port_name!r}"
+          + (f"   forward → {forward_to!r}" if forward_to else ""))
+    print("Ctrl-C pour arrêter.\n")
+    started = time.monotonic()
+    try:
+        with mido.open_input(port_name) as port:
+            for msg in port:
+                if not show_clock and msg.type == "clock":
+                    if fwd is not None:
+                        fwd.send(msg)
+                    continue
+                t = time.monotonic() - started
+                if msg.type == "sysex":
+                    hex_dump = " ".join(f"{b:02X}" for b in msg.bytes())
+                    print(f"[{t:7.3f}] sysex ({len(msg.bytes())} octets) : {hex_dump}")
+                else:
+                    print(f"[{t:7.3f}] {msg}")
+                if fwd is not None:
+                    fwd.send(msg)
+    except KeyboardInterrupt:
+        print("\nArrêt.")
+    finally:
+        if fwd is not None:
+            fwd.close()
+
+
+# ---------------------------------------------------------------------------
 # Active probe: send CCs ourselves, ask the user whether anything changes.
 # Useful since Synthtribe doesn't really transmit CCs to discover from.
 # ---------------------------------------------------------------------------
