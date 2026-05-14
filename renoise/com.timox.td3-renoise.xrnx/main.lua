@@ -680,16 +680,38 @@ local function show_dialog()
     persist(); rebuild_sysex_view()
   end
 
+  -- TD-3 range : C1..C4 = MIDI 24..60. La 4e octave ne couvre que C —
+  -- toute autre note à OCT 4 déborde et serait clampée. On corrige donc
+  -- automatiquement les combinaisons invalides à la saisie pour que ce
+  -- que l'utilisateur voit dans la grille corresponde à ce qui sera
+  -- réellement stocké sur la TD-3.
+  local function note_name(semi)  -- semi 1..12 → "C", "C#", ... "B"
+    return PITCH_NAMES[semi] or "?"
+  end
+
   -- Click handlers
   local function toggle_oct(step, o)
     local s = state.steps[step]
     s.oct = (s.oct == o) and 0 or o
+    if s.oct == 4 and s.semi > 1 then
+      local was = note_name(s.semi)
+      s.semi = 1  -- force à C
+      renoise.app():show_status(string.format(
+        "Step %d : OCT 4 ne couvre que C sur la TD-3, %s ramené à C",
+        step, was))
+    end
     repaint_step(step); on_change()
   end
 
   local function toggle_pitch(step, p)
     local s = state.steps[step]
     s.semi = (s.semi == p) and 0 or p
+    if s.oct == 4 and s.semi > 1 then
+      s.oct = 3  -- bascule sur l'octave la plus haute supportée
+      renoise.app():show_status(string.format(
+        "Step %d : %s @ OCT 4 hors range, basculé à OCT 3",
+        step, note_name(s.semi)))
+    end
     repaint_step(step); on_change()
   end
 
