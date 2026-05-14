@@ -74,6 +74,21 @@ class CaptureResult:
         return " ".join(bits)
 
 
+def _resolve_port(available: list[str], wanted: str) -> str:
+    """Match exact, sinon sous-chaîne unique. Sur Windows les ports ont
+    souvent un index en suffixe (`TD-3-MO 8`) qu'on n'a pas envie de taper."""
+    if wanted in available:
+        return wanted
+    matches = [n for n in available if wanted.lower() in n.lower()]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise RuntimeError(
+            f"Aucun port MIDI ne correspond à {wanted!r}. Disponibles : {available}")
+    raise RuntimeError(
+        f"Port ambigu {wanted!r} — plusieurs candidats : {matches}")
+
+
 def _ensure_mido():
     try:
         import mido  # noqa: F401
@@ -136,6 +151,7 @@ def run_sniffer(port_name: str, timeout_s: float = 8.0,
     Returns the list of captures. Saves a JSON map next to *out_path* if given.
     """
     mido = _ensure_mido()
+    port_name = _resolve_port(mido.get_input_names(), port_name)
 
     print(f"\nOuverture de l'entrée MIDI : {port_name!r}")
     with mido.open_input(port_name) as port:
@@ -204,6 +220,9 @@ def summarise(captures: list[CaptureResult]) -> None:
 def run_monitor(port_name: str, forward_to: str | None = None,
                 show_clock: bool = False) -> None:
     mido = _ensure_mido()
+    port_name = _resolve_port(mido.get_input_names(), port_name)
+    if forward_to:
+        forward_to = _resolve_port(mido.get_output_names(), forward_to)
     fwd = mido.open_output(forward_to) if forward_to else None
     print(f"Écoute sur : {port_name!r}"
           + (f"   forward → {forward_to!r}" if forward_to else ""))
@@ -247,6 +266,7 @@ def run_active_probe(out_port_name: str,
     mido = _ensure_mido()
     if not 1 <= channel <= 16:
         raise ValueError("channel must be 1..16")
+    out_port_name = _resolve_port(mido.get_output_names(), out_port_name)
 
     print(f"\nOuverture de la sortie MIDI : {out_port_name!r}")
     print("Conseil : maintenir une note appuyée (ou lancer une pattern simple")
