@@ -1,0 +1,31 @@
+## Test E — longue chaîne de 8 slides ascendants
+##
+## Steps 1-8 : C2 → D2 → E2 → F2 → G2 → A2 → B2 → C3 chacun en slide
+## Steps 9-16 : rest
+##
+## Vérifie qu'une longue chaîne legato ne casse pas l'enveloppe. Au step 9
+## (rest) le gate devrait se fermer proprement. Si après ce pattern on
+## envoie un autre pattern, la première note doit attaquer normalement
+## (= pas de gate resté ouvert depuis la chaîne).
+
+group: IV
+pattern: 1A
+triplet: false
+step_count: 16
+seq:
+  - "C2"
+  - "D2 slide"
+  - "E2 slide"
+  - "F2 slide"
+  - "G2 slide"
+  - "A2 slide"
+  - "B2 slide"
+  - "C3 slide"
+  - "-"
+  - "-"
+  - "-"
+  - "-"
+  - "-"
+  - "-"
+  - "-"
+  - "-"

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "td3"
-version = "0.3"
+version = "0.15"
 description = "Behringer TD-3 pattern editor: .sqs / SysEx / YAML round-trip"
 requires-python = ">=3.10"
 dependencies = [

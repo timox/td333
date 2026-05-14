@@ -89,6 +89,24 @@ end
 -- @param step_count  1..16
 -- @return table of 112 bytes (1-based)
 function M.encode_data(steps, triplet, step_count)
+  -- Triplet mode quirk : le firmware TD-3 (et Synthtribe) ne tolère pas
+  -- step_count=16 quand triplet est actif. Symptôme observé : les slides
+  -- arrêtent de fonctionner et les attaques sont avalées. Synthtribe
+  -- corrige automatiquement le pattern en clampant step_count à 15 et en
+  -- forçant le 16e step à "held + pitch placeholder" sans accent/slide.
+  -- On fait pareil dans notre encodeur pour que ça marche sans devoir
+  -- passer par Synthtribe.
+  if triplet and step_count > 15 then
+    step_count = 15
+    steps[16] = {
+      rest = false,
+      pitch = M.DEFAULT_PITCH,
+      accent = false,
+      slide = false,
+      tie = true,  -- marque le step comme held (gate hérité du step 15)
+    }
+  end
+
   local pitches, accent, slide = {}, {}, {}
   local rest_bits, hold_bits = {}, {}
   for i = 1, M.STEPS do

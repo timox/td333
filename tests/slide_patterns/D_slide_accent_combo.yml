@@ -1,0 +1,32 @@
+## Test D — slide + accent ensemble sur des notes différentes
+##
+## Steps 1-4 : C2 accent slide, D2, C2 accent slide, D2
+## Steps 5-16 : rest
+##
+## Pattern classique 303 : note accentuée qui glisse vers la suivante.
+## Attendu : C2 attaque accentuée → glisse vers D2 (gate maintenu),
+## puis retrigger sur C2 accent → glisse vers D2 ... 2 cycles.
+## L'accent sur le slide step affecte le filtre (bus accent analogique)
+## même si l'enveloppe ne se redéclenche pas.
+
+group: IV
+pattern: 1A
+triplet: false
+step_count: 16
+seq:
+  - "C2 accent slide"
+  - "D2"
+  - "C2 accent slide"
+  - "D2"
+  - "-"
+  - "-"
+  - "-"
+  - "-"
+  - "-"
+  - "-"
+  - "-"
+  - "-"
+  - "-"
+  - "-"
+  - "-"
+  - "-"
