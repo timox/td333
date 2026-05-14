@@ -98,6 +98,12 @@ local function step_to_td3(s)
   end
   local oct  = s.oct > 0 and s.oct or 2  -- default octave when none picked
   local midi = (oct + 1) * 12 + (s.semi - 1)  -- (oct-1)*12 + (semi-1) + 24
+  -- La TD-3 ne couvre que MIDI 24..60 (C1..C4 inclus). Si on déborde,
+  -- on descend (ou monte) d'une octave pour préserver la pitch class —
+  -- au lieu de clamper bêtement à C4 (= toutes les notes hors range
+  -- devenaient des C, d'où G#4 → C4 dans le bug reporté).
+  while midi > 60 do midi = midi - 12 end
+  while midi < 24 do midi = midi + 12 end
   return {
     pitch  = td3.midi_to_storage(midi),
     rest   = false,
