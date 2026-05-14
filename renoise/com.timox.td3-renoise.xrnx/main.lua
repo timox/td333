@@ -607,18 +607,32 @@ local function show_dialog()
     if not synced or not renoise.song().transport.playing then
       go(); return
     end
-    -- Wait until Renoise's playback_pos wraps to line 0 of its current
-    -- pattern, then fire. Tight polling timer (10 ms) gives a worst-case
-    -- alignment of one Renoise pattern row.
+    -- Wait until Renoise's playback wraps to the next pattern. We track
+    -- the previous line and fire when we detect line wrap (line decreased
+    -- or sequence index changed). Initial line is captured so we don't
+    -- mistake "we're already past line 1" for "we just hit it".
     renoise.app():show_status("TD-3 preview en attente du prochain pattern Renoise...")
+    local song = renoise.song()
+    local prev = { seq = song.transport.playback_pos.sequence,
+                   line = song.transport.playback_pos.line }
+    local started = os.clock()
     local poll
     poll = function()
-      if not renoise.song().transport.playing then
+      if not song.transport.playing then
         if renoise.tool():has_timer(poll) then renoise.tool():remove_timer(poll) end
         go(); return
       end
-      if renoise.song().transport.playback_pos.line == 1 then  -- Renoise lines are 1-based
+      local pos = song.transport.playback_pos
+      local wrapped = (pos.sequence ~= prev.seq) or (pos.line < prev.line)
+      prev.seq, prev.line = pos.sequence, pos.line
+      if wrapped then
         if renoise.tool():has_timer(poll) then renoise.tool():remove_timer(poll) end
+        go(); return
+      end
+      -- Safety : after 30s of waiting, give up and fire anyway.
+      if os.clock() - started > 30 then
+        if renoise.tool():has_timer(poll) then renoise.tool():remove_timer(poll) end
+        renoise.app():show_status("Sync timeout — démarrage forcé du preview TD-3.")
         go()
       end
     end
