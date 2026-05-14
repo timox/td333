@@ -34,7 +34,7 @@ pip install -e ".[midi]"
 → crée la commande `td3` dans le PATH. Si elle n'apparaît pas (Windows
 notamment), lancer à la place : `python -m td3.cli ...`
 
-### Commandes
+### Commandes (résumé)
 
 ```bash
 td3 ports                                 # liste les ports MIDI in/out
@@ -42,15 +42,15 @@ td3 unpack td3dump.sqs --out patterns/    # .sqs → 64 YAML lisibles
 td3 pack patterns/ --out custom.sqs       # YAML → .sqs (compat Synthtribe)
 td3 yaml-to-syx pattern.yml               # YAML → .syx
 td3 syx-to-yaml dump.syx                  # .syx → YAML
-td3 send pattern.yml --port "TD-3 MIDI 1" # envoi SysEx live
+td3 send pattern.yml --port "TD-3-MO"     # envoi SysEx live vers un slot
 td3 send-all patterns/ --port "TD-3"      # envoi de la banque entière
-td3 sniff   --port "loopMIDI" --out cc.json   # capture interactive pas-à-pas
-td3 monitor --port "loopMIDI" --forward-to "TD-3 MIDI 1"  # passthrough live
-td3 probe   --port "TD-3 MIDI 1"          # active probe : envoie CC 0..127, écoute à l'oreille
+td3 monitor --port "loopback" --forward-to "TD-3-MO"  # sniffer passthrough
+td3 sniff   --port "TD-3-MO" --out cc.json     # capture interactive
+td3 probe   --port "TD-3-MO"              # envoi CC 0..127 + écoute oreille
 ```
 
-`td3 monitor` est le plus pratique pour sniffer Synthtribe (cf. setup
-loopMIDI plus bas).
+→ **Documentation détaillée + exemples + workflows** : voir
+[`docs/cli.md`](docs/cli.md).
 
 ### Format YAML d'un pattern
 
