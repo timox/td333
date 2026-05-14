@@ -450,43 +450,51 @@ end
 
 local function preview_start(get_step, step_ms, normal_vel, accent_vel, loop, out)
   preview_stop()
-  _preview_state = { out = out, step = 0, last_note = nil,
+  -- active_notes : pile des Note On envoyés sans Note Off correspondant.
+  -- Une chaîne de slides empile plusieurs notes sans les relâcher pour
+  -- garder le gate TD-3 ouvert (= legato). Sur le premier step non-slide
+  -- ou rest, on relâche TOUS les empilés d'un coup pour que l'enveloppe
+  -- TD-3 retrigge sur la nouvelle attaque.
+  _preview_state = { out = out, step = 0, active_notes = {},
                      get_step = get_step, loop = loop }
+
+  local function release_all(st)
+    for _, n in ipairs(st.active_notes) do
+      send_short(st.out, 0x80, n, 0x40)
+    end
+    st.active_notes = {}
+  end
+
   _preview_timer = function()
     local st = _preview_state
     if not st then return end
     if st.step >= STEPS then
       if st.loop then
-        st.step = 0  -- restart in place; never release between loops to
-                     -- support patterns that chain a slide at the wrap
+        st.step = 0
       else
-        if st.last_note then
-          send_short(st.out, 0x80, st.last_note, 0x40); st.last_note = nil
-        end
+        release_all(st)
         preview_stop(); return
       end
     end
-    local s = st.get_step(st.step + 1)  -- live read each tick
+    local s = st.get_step(st.step + 1)
     if s and not s.rest and s.pitch then
       local midi = td3.storage_to_midi(s.pitch)
       local vel  = s.accent and accent_vel or normal_vel
-      if s.slide and st.last_note then
-        -- Slide / legato : send the new Note ON WITHOUT releasing the
-        -- previous one. The TD-3 in mono mode interprets the overlapping
-        -- Note ON as a portamento glide and keeps the gate open.
+      if s.slide and #st.active_notes > 0 then
+        -- Slide / legato : on empile sans relâcher. Le gate reste ouvert,
+        -- la TD-3 fait son portamento sur la nouvelle note.
         send_short(st.out, 0x90, midi, vel)
+        table.insert(st.active_notes, midi)
       else
-        if st.last_note then
-          send_short(st.out, 0x80, st.last_note, 0x40)
-        end
+        -- Step non-slide : libère TOUT (chaîne de slides précédente
+        -- incluse), puis attaque la nouvelle note proprement.
+        release_all(st)
         send_short(st.out, 0x90, midi, vel)
+        table.insert(st.active_notes, midi)
       end
-      st.last_note = midi
     else
-      -- Rest : explicitly release the running note.
-      if st.last_note then
-        send_short(st.out, 0x80, st.last_note, 0x40); st.last_note = nil
-      end
+      -- Rest : libère tout, gate fermé.
+      release_all(st)
     end
     st.step = st.step + 1
   end
