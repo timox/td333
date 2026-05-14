@@ -563,9 +563,32 @@ local function show_dialog()
     for i = 1, STEPS do repaint_step(i) end
   end
 
+  -- Record helper : pilote le Sample Recorder Renoise via l'API 6.2
+  -- (start_sample_recording / stop_sample_recording + flag sync). Le panel
+  -- doit être visible : on l'ouvre s'il ne l'est pas. Renoise quantize le
+  -- record sur la frontière de pattern courante quand sync_enabled est on.
+  local function start_recording()
+    local app = renoise.app()
+    local song = renoise.song()
+    local ok, err = pcall(function()
+      app.window.sample_record_dialog_is_visible = true
+      song.transport.sample_recording_sync_enabled = true
+      song.transport:start_sample_recording()
+    end)
+    if not ok then
+      renoise.app():show_warning("API Renoise 6.2+ requise pour piloter le Sample Recorder.\n\n" ..
+        "Erreur : " .. tostring(err))
+      return false
+    end
+    return true
+  end
+
+  local function stop_recording()
+    pcall(function() renoise.song().transport:stop_sample_recording() end)
+  end
+
   -- Two preview launchers: immediate or aligned to Renoise's next pattern
-  -- boundary. Sync=line 0 of the playing pattern. With Renoise's sample
-  -- recorder set to Sync=Pattern at the same time, the take starts in phase.
+  -- boundary. Sync=line 0 of the playing pattern.
   local function launch_preview(synced)
     local out = get_midi_out(PREFS.midi_out_name.value)
     if not out then renoise.app():show_warning("Aucun port MIDI valide.") return end
@@ -808,6 +831,11 @@ local function show_dialog()
     vb:button { text = "▶ Sync",    width = 70,
                 notifier = function() launch_preview(true) end,
                 tooltip = "Attend la prochaine frontière de pattern Renoise avant de lancer le loop. À coupler avec Sample Recorder en Sync=Pattern pour une prise calée." },
+    vb:button { text = "⏺ Bounce",  width = 80,
+                tooltip = "Ouvre le Sample Recorder Renoise en mode Sync=Pattern, l'arme, puis lance Preview synchronisé. À la prochaine frontière de pattern Renoise : Renoise commence à enregistrer ET le loop TD-3 démarre. Clic Stop pour terminer la prise.",
+                notifier = function()
+                  if start_recording() then launch_preview(true) end
+                end },
     vb:checkbox { value = PREFS.loop.value,
                   notifier = function(v) PREFS.loop.value = v end },
     vb:text { text = "loop" },
@@ -821,7 +849,9 @@ local function show_dialog()
       notifier = function(v) PREFS.step_rate_index.value = v end,
       width = 90,
     },
-    vb:button { text = "Stop", width = 50, notifier = preview_stop },
+    vb:button { text = "Stop", width = 50,
+                notifier = function() stop_recording(); preview_stop() end,
+                tooltip = "Arrête le Preview TD-3 et le Sample Recorder Renoise s'il tourne." },
     vb:button { text = "Panic", width = 60,
                 notifier = function()
                   local out = get_midi_out(PREFS.midi_out_name.value)
