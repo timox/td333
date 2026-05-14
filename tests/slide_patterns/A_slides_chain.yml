@@ -1,0 +1,30 @@
+## Test A — 4 slides consécutifs vers des pitches différentes
+##
+## Steps 1-4 : C2 → D2 → E2 → F2, chaque step en slide (sauf le 1er
+## qui n'a personne à qui glisser depuis, donc juste "slide" cosmétique).
+## Steps 5-16 : rest.
+##
+## Attendu côté TD-3 : grand portamento C2 → D2 → E2 → F2, un seul
+## envelope (pas de retrigger entre), suivi de silence.
+
+group: IV
+pattern: 1A
+triplet: false
+step_count: 16
+seq:
+  - "C2"
+  - "D2 slide"
+  - "E2 slide"
+  - "F2 slide"
+  - "-"
+  - "-"
+  - "-"
+  - "-"
+  - "-"
+  - "-"
+  - "-"
+  - "-"
+  - "-"
+  - "-"
+  - "-"
+  - "-"

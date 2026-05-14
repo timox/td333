@@ -1,0 +1,31 @@
+## Test C — slide vers la même tonalité (= sustain attendu)
+##
+## Steps 1-4 : C2, C2 slide, C2 slide, C2 (le dernier sans slide)
+## Steps 5-16 : rest
+##
+## Attendu : UNE longue note C2 tenue sur les 4 steps (un seul envelope),
+## puis silence. Le slide vers la même pitch ne devrait pas redéclencher.
+## Si on entend 4 attaques distinctes, le firmware retrigge sur même
+## pitch malgré le slide flag (= comportement à documenter).
+
+group: IV
+pattern: 1A
+triplet: false
+step_count: 16
+seq:
+  - "C2"
+  - "C2 slide"
+  - "C2 slide"
+  - "C2 slide"
+  - "-"
+  - "-"
+  - "-"
+  - "-"
+  - "-"
+  - "-"
+  - "-"
+  - "-"
+  - "-"
+  - "-"
+  - "-"
+  - "-"
