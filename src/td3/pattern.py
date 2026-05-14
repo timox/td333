@@ -121,6 +121,20 @@ class Pattern:
             raise ValueError("unknown1/unknown2 must be 2 bytes each")
         if len(self.steps) != STEPS:
             raise ValueError(f"pattern needs exactly {STEPS} steps")
+        # Triplet quirk: the firmware (and Synthtribe) rejects step_count=16
+        # in triplet mode — slides stop working and attacks are swallowed.
+        # We mirror Synthtribe's normalisation : clamp to 15 and force the
+        # 16th step into a held placeholder. Round-trip of factory patterns
+        # is unaffected since none of them use that combo.
+        if self.triplet and self.step_count > 15:
+            self.step_count = 15
+            self.steps[15] = Step(
+                rest=False,
+                note=DEFAULT_NOTE_MIDI,
+                accent=False,
+                slide=False,
+                tie=True,
+            )
         pitches = [midi_to_storage(s.note) for s in self.steps]
         accent  = [1 if s.accent else 0   for s in self.steps]
         slide   = [1 if s.slide  else 0   for s in self.steps]
