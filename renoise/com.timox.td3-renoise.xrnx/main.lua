@@ -424,13 +424,26 @@ end
 
 local _preview_timer, _preview_state = nil, nil
 
+local function all_notes_off(out)
+  -- Belt and suspenders : Note OFF for every possible pitch, then CC 123
+  -- (All Notes Off), CC 120 (All Sound Off), and the MIDI System Real-Time
+  -- Stop (0xFC) to halt any internal sequencer that may have been started.
+  if not out then return end
+  for n = 0, 127 do
+    send_short(out, 0x80, n, 0x40)
+  end
+  send_short(out, 0xB0, 123, 0)
+  send_short(out, 0xB0, 120, 0)
+  out:send { 0xFC }  -- MIDI Stop (system real-time, no channel)
+end
+
 local function preview_stop()
   if _preview_timer and renoise.tool():has_timer(_preview_timer) then
     renoise.tool():remove_timer(_preview_timer)
   end
   _preview_timer = nil
-  if _preview_state and _preview_state.out and _preview_state.last_note then
-    send_short(_preview_state.out, 0x80, _preview_state.last_note, 0x40)
+  if _preview_state and _preview_state.out then
+    all_notes_off(_preview_state.out)
   end
   _preview_state = nil
 end
@@ -548,6 +561,68 @@ local function show_dialog()
 
   local function repaint_all()
     for i = 1, STEPS do repaint_step(i) end
+  end
+
+  -- Record helper : pilote le Sample Recorder Renoise via l'API 6.2
+  -- (start_sample_recording / stop_sample_recording + flag sync). Le panel
+  -- doit être visible : on l'ouvre s'il ne l'est pas. Renoise quantize le
+  -- record sur la frontière de pattern courante quand sync_enabled est on.
+  local function start_recording()
+    local app = renoise.app()
+    local song = renoise.song()
+    local ok, err = pcall(function()
+      app.window.sample_record_dialog_is_visible = true
+      song.transport.sample_recording_sync_enabled = true
+      song.transport:start_sample_recording()
+    end)
+    if not ok then
+      renoise.app():show_warning("API Renoise 6.2+ requise pour piloter le Sample Recorder.\n\n" ..
+        "Erreur : " .. tostring(err))
+      return false
+    end
+    return true
+  end
+
+  local function stop_recording()
+    pcall(function() renoise.song().transport:stop_sample_recording() end)
+  end
+
+  -- Two preview launchers: immediate or aligned to Renoise's next pattern
+  -- boundary. Sync=line 0 of the playing pattern.
+  local function launch_preview(synced)
+    local out = get_midi_out(PREFS.midi_out_name.value)
+    if not out then renoise.app():show_warning("Aucun port MIDI valide.") return end
+    local step_ms = PREFS.preview_step_ms.value
+    if PREFS.sync_bpm.value then
+      local rate = STEP_RATES[PREFS.step_rate_index.value] or STEP_RATES[3]
+      step_ms = math.floor(15000 / (renoise.song().transport.bpm * rate.mult) + 0.5)
+    end
+    local function read_step(i) return step_to_td3(state.steps[i]) end
+    local function go()
+      preview_start(read_step, step_ms,
+                    PREFS.normal_velocity.value,
+                    PREFS.accent_velocity.value,
+                    PREFS.loop.value, out)
+    end
+    if not synced or not renoise.song().transport.playing then
+      go(); return
+    end
+    -- Wait until Renoise's playback_pos wraps to line 0 of its current
+    -- pattern, then fire. Tight polling timer (10 ms) gives a worst-case
+    -- alignment of one Renoise pattern row.
+    renoise.app():show_status("TD-3 preview en attente du prochain pattern Renoise...")
+    local poll
+    poll = function()
+      if not renoise.song().transport.playing then
+        if renoise.tool():has_timer(poll) then renoise.tool():remove_timer(poll) end
+        go(); return
+      end
+      if renoise.song().transport.playback_pos.line == 1 then  -- Renoise lines are 1-based
+        if renoise.tool():has_timer(poll) then renoise.tool():remove_timer(poll) end
+        go()
+      end
+    end
+    renoise.tool():add_timer(poll, 10)
   end
 
   local function on_change()
@@ -751,22 +826,15 @@ local function show_dialog()
                   import_from_renoise(state.steps, 0x60, -1)
                   repaint_all(); on_change()
                 end },
-    vb:button { text = "Preview ▶", width = 90,
+    vb:button { text = "▶ Preview", width = 90,
+                notifier = function() launch_preview(false) end },
+    vb:button { text = "▶ Sync",    width = 70,
+                notifier = function() launch_preview(true) end,
+                tooltip = "Attend la prochaine frontière de pattern Renoise avant de lancer le loop. À coupler avec Sample Recorder en Sync=Pattern pour une prise calée." },
+    vb:button { text = "⏺ Bounce",  width = 80,
+                tooltip = "Ouvre le Sample Recorder Renoise en mode Sync=Pattern, l'arme, puis lance Preview synchronisé. À la prochaine frontière de pattern Renoise : Renoise commence à enregistrer ET le loop TD-3 démarre. Clic Stop pour terminer la prise.",
                 notifier = function()
-                  local out = get_midi_out(PREFS.midi_out_name.value)
-                  if not out then renoise.app():show_warning("Aucun port MIDI valide.") return end
-                  local step_ms = PREFS.preview_step_ms.value
-                  if PREFS.sync_bpm.value then
-                    local rate = STEP_RATES[PREFS.step_rate_index.value] or STEP_RATES[3]
-                    step_ms = math.floor(15000 / (renoise.song().transport.bpm * rate.mult) + 0.5)
-                  end
-                  -- Closure : la boucle relit l'état courant à chaque step,
-                  -- les modifs en grille sont prises en compte sans Stop.
-                  local function read_step(i) return step_to_td3(state.steps[i]) end
-                  preview_start(read_step, step_ms,
-                                PREFS.normal_velocity.value,
-                                PREFS.accent_velocity.value,
-                                PREFS.loop.value, out)
+                  if start_recording() then launch_preview(true) end
                 end },
     vb:checkbox { value = PREFS.loop.value,
                   notifier = function(v) PREFS.loop.value = v end },
@@ -781,7 +849,14 @@ local function show_dialog()
       notifier = function(v) PREFS.step_rate_index.value = v end,
       width = 90,
     },
-    vb:button { text = "Stop", width = 50, notifier = preview_stop },
+    vb:button { text = "Stop", width = 50,
+                notifier = function() stop_recording(); preview_stop() end,
+                tooltip = "Arrête le Preview TD-3 et le Sample Recorder Renoise s'il tourne." },
+    vb:button { text = "Panic", width = 60,
+                notifier = function()
+                  local out = get_midi_out(PREFS.midi_out_name.value)
+                  if out then all_notes_off(out) end
+                end },
     vb:button { text = "⚠  Write to TD-3", width = 140,
                 notifier = function()
                   local out = get_midi_out(PREFS.midi_out_name.value)
