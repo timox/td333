@@ -223,31 +223,43 @@ def run_monitor(port_name: str, forward_to: str | None = None,
     port_name = _resolve_port(mido.get_input_names(), port_name)
     if forward_to:
         forward_to = _resolve_port(mido.get_output_names(), forward_to)
+
+    # Polling au lieu de "for msg in port" : ça permet à Ctrl-C de couper
+    # proprement et de relâcher les ports — sinon rtmidi/Windows les garde
+    # verrouillés et Synthtribe ne peut plus les rouvrir.
+    inp = mido.open_input(port_name)
     fwd = mido.open_output(forward_to) if forward_to else None
     print(f"Écoute sur : {port_name!r}"
           + (f"   forward → {forward_to!r}" if forward_to else ""))
     print("Ctrl-C pour arrêter.\n")
     started = time.monotonic()
     try:
-        with mido.open_input(port_name) as port:
-            for msg in port:
-                if not show_clock and msg.type == "clock":
-                    if fwd is not None:
-                        fwd.send(msg)
-                    continue
-                t = time.monotonic() - started
-                if msg.type == "sysex":
-                    hex_dump = " ".join(f"{b:02X}" for b in msg.bytes())
-                    print(f"[{t:7.3f}] sysex ({len(msg.bytes())} octets) : {hex_dump}")
-                else:
-                    print(f"[{t:7.3f}] {msg}")
+        while True:
+            msg = inp.poll()
+            if msg is None:
+                time.sleep(0.001)
+                continue
+            if not show_clock and msg.type == "clock":
                 if fwd is not None:
                     fwd.send(msg)
+                continue
+            t = time.monotonic() - started
+            if msg.type == "sysex":
+                hex_dump = " ".join(f"{b:02X}" for b in msg.bytes())
+                print(f"[{t:7.3f}] sysex ({len(msg.bytes())} octets) : {hex_dump}")
+            else:
+                print(f"[{t:7.3f}] {msg}")
+            if fwd is not None:
+                fwd.send(msg)
     except KeyboardInterrupt:
-        print("\nArrêt.")
+        print("\nArrêt demandé.")
     finally:
+        try: inp.close()
+        except Exception: pass
         if fwd is not None:
-            fwd.close()
+            try: fwd.close()
+            except Exception: pass
+        print("Ports MIDI fermés.")
 
 
 # ---------------------------------------------------------------------------
