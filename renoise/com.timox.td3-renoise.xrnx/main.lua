@@ -424,13 +424,26 @@ end
 
 local _preview_timer, _preview_state = nil, nil
 
+local function all_notes_off(out)
+  -- Belt and suspenders : Note OFF for every possible pitch, then CC 123
+  -- (All Notes Off), CC 120 (All Sound Off), and the MIDI System Real-Time
+  -- Stop (0xFC) to halt any internal sequencer that may have been started.
+  if not out then return end
+  for n = 0, 127 do
+    send_short(out, 0x80, n, 0x40)
+  end
+  send_short(out, 0xB0, 123, 0)
+  send_short(out, 0xB0, 120, 0)
+  out:send { 0xFC }  -- MIDI Stop (system real-time, no channel)
+end
+
 local function preview_stop()
   if _preview_timer and renoise.tool():has_timer(_preview_timer) then
     renoise.tool():remove_timer(_preview_timer)
   end
   _preview_timer = nil
-  if _preview_state and _preview_state.out and _preview_state.last_note then
-    send_short(_preview_state.out, 0x80, _preview_state.last_note, 0x40)
+  if _preview_state and _preview_state.out then
+    all_notes_off(_preview_state.out)
   end
   _preview_state = nil
 end
@@ -782,6 +795,11 @@ local function show_dialog()
       width = 90,
     },
     vb:button { text = "Stop", width = 50, notifier = preview_stop },
+    vb:button { text = "Panic", width = 60,
+                notifier = function()
+                  local out = get_midi_out(PREFS.midi_out_name.value)
+                  if out then all_notes_off(out) end
+                end },
     vb:button { text = "⚠  Write to TD-3", width = 140,
                 notifier = function()
                   local out = get_midi_out(PREFS.midi_out_name.value)
