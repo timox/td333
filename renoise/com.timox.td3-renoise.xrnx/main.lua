@@ -1302,11 +1302,6 @@ local function new_live_steps()
   return t
 end
 
-local function step_has_fx(s)
-  return s.ratchet ~= FX_DEFAULT.ratchet or s.cutoff ~= FX_DEFAULT.cutoff
-      or s.delay ~= FX_DEFAULT.delay or s.gate ~= FX_DEFAULT.gate
-end
-
 local function live_steps_to_string(steps)
   local parts = {}
   for i = 1, MAX_STEPS do
@@ -1542,7 +1537,11 @@ local function show_live_dialog()
   local vb    = renoise.ViewBuilder()
   local state = { steps = live_steps_from_string(PREFS.live_pattern_state.value),
                   length = PREFS.live_length.value, sel = 1 }
-  local cells = { oct = {}, pitch = {}, accent = {}, slide = {}, fx = {} }
+  -- fxr/fxc/fxd/fxg : une lane visible par effet (Ratchet/Cutoff/Delay/
+  -- Gate). La valeur précise s'édite dans l'inspecteur ; la lane montre
+  -- d'un coup d'œil quels pas portent l'effet + le pas sélectionné.
+  local cells = { oct = {}, pitch = {}, accent = {}, slide = {},
+                  fxr = {}, fxc = {}, fxd = {}, fxg = {} }
   local status_view
   local fx_boxes = {}
 
@@ -1563,10 +1562,15 @@ local function show_live_dialog()
     for p = 1, 12 do paint(cells.pitch[p][i], s.semi == p and COLOR_ON or off) end
     paint(cells.accent[i], s.accent and COLOR_ON or off)
     paint(cells.slide[i],  s.slide  and COLOR_ON or off)
-    local fxc = off
-    if step_has_fx(s) then fxc = COLOR_FX end
-    if i == state.sel then fxc = COLOR_SEL end
-    paint(cells.fx[i], fxc)
+    local function lane(nondefault)
+      if i == state.sel then return COLOR_SEL end
+      if nondefault then return COLOR_FX end
+      return off
+    end
+    paint(cells.fxr[i], lane(s.ratchet ~= FX_DEFAULT.ratchet))
+    paint(cells.fxc[i], lane(s.cutoff  ~= FX_DEFAULT.cutoff))
+    paint(cells.fxd[i], lane(s.delay   ~= FX_DEFAULT.delay))
+    paint(cells.fxg[i], lane(s.gate    ~= FX_DEFAULT.gate))
   end
 
   local function repaint_all()
@@ -1665,8 +1669,12 @@ local function show_live_dialog()
     function(s) return function() toggle_slide(s) end end)
   local accent_row = note_row("ACCENT", cells.accent,
     function(s) return function() toggle_accent(s) end end)
-  local fx_row     = note_row("FX·sel", cells.fx,
-    function(s) return function() select_step(s) end end)
+  -- Lanes FX : clic = sélectionne le pas (valeur éditée dans l'inspecteur).
+  local function fx_factory(s) return function() select_step(s) end end
+  local fxr_row = note_row("RATCHET", cells.fxr, fx_factory)
+  local fxc_row = note_row("CUTOFF",  cells.fxc, fx_factory)
+  local fxd_row = note_row("DELAY",   cells.fxd, fx_factory)
+  local fxg_row = note_row("GATE",    cells.fxg, fx_factory)
 
   -- Toolbars -----------------------------------------------------------------
   local midi_outs = renoise.Midi.available_output_devices()
@@ -1803,7 +1811,10 @@ local function show_live_dialog()
   table.insert(items, slide_row)
   table.insert(items, accent_row)
   table.insert(items, vb:space { height = 4 })
-  table.insert(items, fx_row)
+  table.insert(items, fxr_row)
+  table.insert(items, fxc_row)
+  table.insert(items, fxd_row)
+  table.insert(items, fxg_row)
   table.insert(items, vb:space { height = 6 })
   table.insert(items, status_view)
 
