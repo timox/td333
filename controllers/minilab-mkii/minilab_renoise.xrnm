@@ -1,133 +1,377 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <MidiActionMappingSet doc_version="0">
   <ActionMappings>
-    <!-- 8 ENCODEURS — Volume tracks 1-8 (Ch2, CC 21-28) -->
     <ActionMapping>
       <Action>Track Levels:Volume:Track XX (Pre):Track #01 [Set]</Action>
       <MidiMappings><MidiMapping>
-        <MappingMode>Controllers</MappingMode><ControllerMode>Absolute 7 bit</ControllerMode>
-        <NoteMode>Trigger</NoteMode><Channel>1</Channel><CCNumberOrNote>21</CCNumberOrNote>
+        <MappingMode>Controllers</MappingMode>
+        <ControllerMode>Absolute 7 bit</ControllerMode>
+        <NoteMode>Trigger</NoteMode>
+        <Channel>0</Channel>
+        <CCNumberOrNote>21</CCNumberOrNote>
         <Min>0.0</Min><Max>1.0</Max>
       </MidiMapping></MidiMappings>
     </ActionMapping>
     <ActionMapping>
       <Action>Track Levels:Volume:Track XX (Pre):Track #02 [Set]</Action>
       <MidiMappings><MidiMapping>
-        <MappingMode>Controllers</MappingMode><ControllerMode>Absolute 7 bit</ControllerMode>
-        <NoteMode>Trigger</NoteMode><Channel>1</Channel><CCNumberOrNote>22</CCNumberOrNote>
+        <MappingMode>Controllers</MappingMode>
+        <ControllerMode>Absolute 7 bit</ControllerMode>
+        <NoteMode>Trigger</NoteMode>
+        <Channel>0</Channel>
+        <CCNumberOrNote>22</CCNumberOrNote>
         <Min>0.0</Min><Max>1.0</Max>
       </MidiMapping></MidiMappings>
     </ActionMapping>
     <ActionMapping>
       <Action>Track Levels:Volume:Track XX (Pre):Track #03 [Set]</Action>
       <MidiMappings><MidiMapping>
-        <MappingMode>Controllers</MappingMode><ControllerMode>Absolute 7 bit</ControllerMode>
-        <NoteMode>Trigger</NoteMode><Channel>1</Channel><CCNumberOrNote>23</CCNumberOrNote>
+        <MappingMode>Controllers</MappingMode>
+        <ControllerMode>Absolute 7 bit</ControllerMode>
+        <NoteMode>Trigger</NoteMode>
+        <Channel>0</Channel>
+        <CCNumberOrNote>23</CCNumberOrNote>
         <Min>0.0</Min><Max>1.0</Max>
       </MidiMapping></MidiMappings>
     </ActionMapping>
     <ActionMapping>
       <Action>Track Levels:Volume:Track XX (Pre):Track #04 [Set]</Action>
       <MidiMappings><MidiMapping>
-        <MappingMode>Controllers</MappingMode><ControllerMode>Absolute 7 bit</ControllerMode>
-        <NoteMode>Trigger</NoteMode><Channel>1</Channel><CCNumberOrNote>24</CCNumberOrNote>
+        <MappingMode>Controllers</MappingMode>
+        <ControllerMode>Absolute 7 bit</ControllerMode>
+        <NoteMode>Trigger</NoteMode>
+        <Channel>0</Channel>
+        <CCNumberOrNote>24</CCNumberOrNote>
         <Min>0.0</Min><Max>1.0</Max>
       </MidiMapping></MidiMappings>
     </ActionMapping>
     <ActionMapping>
       <Action>Track Levels:Volume:Track XX (Pre):Track #05 [Set]</Action>
       <MidiMappings><MidiMapping>
-        <MappingMode>Controllers</MappingMode><ControllerMode>Absolute 7 bit</ControllerMode>
-        <NoteMode>Trigger</NoteMode><Channel>1</Channel><CCNumberOrNote>25</CCNumberOrNote>
+        <MappingMode>Controllers</MappingMode>
+        <ControllerMode>Absolute 7 bit</ControllerMode>
+        <NoteMode>Trigger</NoteMode>
+        <Channel>0</Channel>
+        <CCNumberOrNote>25</CCNumberOrNote>
         <Min>0.0</Min><Max>1.0</Max>
       </MidiMapping></MidiMappings>
     </ActionMapping>
     <ActionMapping>
       <Action>Track Levels:Volume:Track XX (Pre):Track #06 [Set]</Action>
       <MidiMappings><MidiMapping>
-        <MappingMode>Controllers</MappingMode><ControllerMode>Absolute 7 bit</ControllerMode>
-        <NoteMode>Trigger</NoteMode><Channel>1</Channel><CCNumberOrNote>26</CCNumberOrNote>
+        <MappingMode>Controllers</MappingMode>
+        <ControllerMode>Absolute 7 bit</ControllerMode>
+        <NoteMode>Trigger</NoteMode>
+        <Channel>0</Channel>
+        <CCNumberOrNote>26</CCNumberOrNote>
         <Min>0.0</Min><Max>1.0</Max>
       </MidiMapping></MidiMappings>
     </ActionMapping>
     <ActionMapping>
       <Action>Track Levels:Volume:Track XX (Pre):Track #07 [Set]</Action>
       <MidiMappings><MidiMapping>
-        <MappingMode>Controllers</MappingMode><ControllerMode>Absolute 7 bit</ControllerMode>
-        <NoteMode>Trigger</NoteMode><Channel>1</Channel><CCNumberOrNote>27</CCNumberOrNote>
+        <MappingMode>Controllers</MappingMode>
+        <ControllerMode>Absolute 7 bit</ControllerMode>
+        <NoteMode>Trigger</NoteMode>
+        <Channel>0</Channel>
+        <CCNumberOrNote>27</CCNumberOrNote>
         <Min>0.0</Min><Max>1.0</Max>
       </MidiMapping></MidiMappings>
     </ActionMapping>
     <ActionMapping>
       <Action>Track Levels:Volume:Track XX (Pre):Track #08 [Set]</Action>
       <MidiMappings><MidiMapping>
-        <MappingMode>Controllers</MappingMode><ControllerMode>Absolute 7 bit</ControllerMode>
-        <NoteMode>Trigger</NoteMode><Channel>1</Channel><CCNumberOrNote>28</CCNumberOrNote>
+        <MappingMode>Controllers</MappingMode>
+        <ControllerMode>Absolute 7 bit</ControllerMode>
+        <NoteMode>Trigger</NoteMode>
+        <Channel>0</Channel>
+        <CCNumberOrNote>28</CCNumberOrNote>
         <Min>0.0</Min><Max>1.0</Max>
       </MidiMapping></MidiMappings>
     </ActionMapping>
-    <!-- 8 PADS banque 1 — Navigation (valeurs capturées sur ton MiniLab) -->
+    <ActionMapping>
+      <Action>Track DSPs:Selected FX:Parameter #01 [Set]</Action>
+      <MidiMappings><MidiMapping>
+        <MappingMode>Controllers</MappingMode>
+        <ControllerMode>Absolute 7 bit</ControllerMode>
+        <NoteMode>Trigger</NoteMode>
+        <Channel>0</Channel>
+        <CCNumberOrNote>31</CCNumberOrNote>
+        <Min>0.0</Min><Max>1.0</Max>
+      </MidiMapping></MidiMappings>
+    </ActionMapping>
+    <ActionMapping>
+      <Action>Track DSPs:Selected FX:Parameter #02 [Set]</Action>
+      <MidiMappings><MidiMapping>
+        <MappingMode>Controllers</MappingMode>
+        <ControllerMode>Absolute 7 bit</ControllerMode>
+        <NoteMode>Trigger</NoteMode>
+        <Channel>0</Channel>
+        <CCNumberOrNote>32</CCNumberOrNote>
+        <Min>0.0</Min><Max>1.0</Max>
+      </MidiMapping></MidiMappings>
+    </ActionMapping>
+    <ActionMapping>
+      <Action>Track DSPs:Selected FX:Parameter #03 [Set]</Action>
+      <MidiMappings><MidiMapping>
+        <MappingMode>Controllers</MappingMode>
+        <ControllerMode>Absolute 7 bit</ControllerMode>
+        <NoteMode>Trigger</NoteMode>
+        <Channel>0</Channel>
+        <CCNumberOrNote>33</CCNumberOrNote>
+        <Min>0.0</Min><Max>1.0</Max>
+      </MidiMapping></MidiMappings>
+    </ActionMapping>
+    <ActionMapping>
+      <Action>Track DSPs:Selected FX:Parameter #04 [Set]</Action>
+      <MidiMappings><MidiMapping>
+        <MappingMode>Controllers</MappingMode>
+        <ControllerMode>Absolute 7 bit</ControllerMode>
+        <NoteMode>Trigger</NoteMode>
+        <Channel>0</Channel>
+        <CCNumberOrNote>34</CCNumberOrNote>
+        <Min>0.0</Min><Max>1.0</Max>
+      </MidiMapping></MidiMappings>
+    </ActionMapping>
+    <ActionMapping>
+      <Action>Track DSPs:Selected FX:Parameter #05 [Set]</Action>
+      <MidiMappings><MidiMapping>
+        <MappingMode>Controllers</MappingMode>
+        <ControllerMode>Absolute 7 bit</ControllerMode>
+        <NoteMode>Trigger</NoteMode>
+        <Channel>0</Channel>
+        <CCNumberOrNote>35</CCNumberOrNote>
+        <Min>0.0</Min><Max>1.0</Max>
+      </MidiMapping></MidiMappings>
+    </ActionMapping>
+    <ActionMapping>
+      <Action>Track DSPs:Selected FX:Parameter #06 [Set]</Action>
+      <MidiMappings><MidiMapping>
+        <MappingMode>Controllers</MappingMode>
+        <ControllerMode>Absolute 7 bit</ControllerMode>
+        <NoteMode>Trigger</NoteMode>
+        <Channel>0</Channel>
+        <CCNumberOrNote>36</CCNumberOrNote>
+        <Min>0.0</Min><Max>1.0</Max>
+      </MidiMapping></MidiMappings>
+    </ActionMapping>
+    <ActionMapping>
+      <Action>Track DSPs:Selected FX:Parameter #07 [Set]</Action>
+      <MidiMappings><MidiMapping>
+        <MappingMode>Controllers</MappingMode>
+        <ControllerMode>Absolute 7 bit</ControllerMode>
+        <NoteMode>Trigger</NoteMode>
+        <Channel>0</Channel>
+        <CCNumberOrNote>37</CCNumberOrNote>
+        <Min>0.0</Min><Max>1.0</Max>
+      </MidiMapping></MidiMappings>
+    </ActionMapping>
+    <ActionMapping>
+      <Action>Track DSPs:Selected FX:Parameter #08 [Set]</Action>
+      <MidiMappings><MidiMapping>
+        <MappingMode>Controllers</MappingMode>
+        <ControllerMode>Absolute 7 bit</ControllerMode>
+        <NoteMode>Trigger</NoteMode>
+        <Channel>0</Channel>
+        <CCNumberOrNote>38</CCNumberOrNote>
+        <Min>0.0</Min><Max>1.0</Max>
+      </MidiMapping></MidiMappings>
+    </ActionMapping>
+    <ActionMapping>
+      <Action>Transport:Playback:Start/Stop Playing [Set]</Action>
+      <MidiMappings><MidiMapping>
+        <MappingMode>Controllers</MappingMode>
+        <ControllerMode>Absolute 7 bit</ControllerMode>
+        <NoteMode>Value</NoteMode>
+        <Channel>0</Channel>
+        <CCNumberOrNote>113</CCNumberOrNote>
+        <Min>0.0</Min><Max>1.0</Max>
+      </MidiMapping></MidiMappings>
+    </ActionMapping>
+    <ActionMapping>
+      <Action>Seq. Triggering:Trigger:Current [Trigger]</Action>
+      <MidiMappings><MidiMapping>
+        <MappingMode>Controllers</MappingMode>
+        <ControllerMode>Absolute 7 bit</ControllerMode>
+        <NoteMode>Value</NoteMode>
+        <Channel>0</Channel>
+        <CCNumberOrNote>115</CCNumberOrNote>
+        <Min>0.0</Min><Max>1.0</Max>
+      </MidiMapping></MidiMappings>
+    </ActionMapping>
     <ActionMapping>
       <Action>Navigation:Sequencer:Select Previous Sequence Pos [Trigger]</Action>
       <MidiMappings><MidiMapping>
-        <MappingMode>Controllers</MappingMode><ControllerMode>Absolute 7 bit</ControllerMode>
-        <NoteMode>Value</NoteMode><Channel>1</Channel><CCNumberOrNote>52</CCNumberOrNote>
+        <MappingMode>Notes</MappingMode>
+        <ControllerMode>Relative two's comp</ControllerMode>
+        <NoteMode>Trigger</NoteMode>
+        <Channel>0</Channel>
+        <CCNumberOrNote>36</CCNumberOrNote>
         <Min>0.0</Min><Max>1.0</Max>
       </MidiMapping></MidiMappings>
     </ActionMapping>
     <ActionMapping>
       <Action>Navigation:Sequencer:Select Next Sequence Pos [Trigger]</Action>
       <MidiMappings><MidiMapping>
-        <MappingMode>Notes</MappingMode><ControllerMode>Relative two's comp</ControllerMode>
-        <NoteMode>Trigger</NoteMode><Channel>9</Channel><CCNumberOrNote>37</CCNumberOrNote>
+        <MappingMode>Notes</MappingMode>
+        <ControllerMode>Relative two's comp</ControllerMode>
+        <NoteMode>Trigger</NoteMode>
+        <Channel>0</Channel>
+        <CCNumberOrNote>37</CCNumberOrNote>
         <Min>0.0</Min><Max>1.0</Max>
       </MidiMapping></MidiMappings>
     </ActionMapping>
     <ActionMapping>
       <Action>Navigation:Tracks:Select Previous Track [Trigger]</Action>
       <MidiMappings><MidiMapping>
-        <MappingMode>Notes</MappingMode><ControllerMode>Relative two's comp</ControllerMode>
-        <NoteMode>Trigger</NoteMode><Channel>9</Channel><CCNumberOrNote>38</CCNumberOrNote>
+        <MappingMode>Notes</MappingMode>
+        <ControllerMode>Relative two's comp</ControllerMode>
+        <NoteMode>Trigger</NoteMode>
+        <Channel>0</Channel>
+        <CCNumberOrNote>38</CCNumberOrNote>
         <Min>0.0</Min><Max>1.0</Max>
       </MidiMapping></MidiMappings>
     </ActionMapping>
     <ActionMapping>
       <Action>Navigation:Tracks:Select Next Track [Trigger]</Action>
       <MidiMappings><MidiMapping>
-        <MappingMode>Notes</MappingMode><ControllerMode>Relative two's comp</ControllerMode>
-        <NoteMode>Trigger</NoteMode><Channel>9</Channel><CCNumberOrNote>39</CCNumberOrNote>
+        <MappingMode>Notes</MappingMode>
+        <ControllerMode>Relative two's comp</ControllerMode>
+        <NoteMode>Trigger</NoteMode>
+        <Channel>0</Channel>
+        <CCNumberOrNote>39</CCNumberOrNote>
         <Min>0.0</Min><Max>1.0</Max>
       </MidiMapping></MidiMappings>
     </ActionMapping>
     <ActionMapping>
       <Action>Navigation:Track DSPs:Select Previous Track DSP [Trigger]</Action>
       <MidiMappings><MidiMapping>
-        <MappingMode>Notes</MappingMode><ControllerMode>Relative two's comp</ControllerMode>
-        <NoteMode>Trigger</NoteMode><Channel>9</Channel><CCNumberOrNote>40</CCNumberOrNote>
+        <MappingMode>Notes</MappingMode>
+        <ControllerMode>Relative two's comp</ControllerMode>
+        <NoteMode>Trigger</NoteMode>
+        <Channel>0</Channel>
+        <CCNumberOrNote>40</CCNumberOrNote>
         <Min>0.0</Min><Max>1.0</Max>
       </MidiMapping></MidiMappings>
     </ActionMapping>
     <ActionMapping>
       <Action>Navigation:Track DSPs:Select Next Track DSP [Trigger]</Action>
       <MidiMappings><MidiMapping>
-        <MappingMode>Notes</MappingMode><ControllerMode>Relative two's comp</ControllerMode>
-        <NoteMode>Trigger</NoteMode><Channel>9</Channel><CCNumberOrNote>41</CCNumberOrNote>
+        <MappingMode>Notes</MappingMode>
+        <ControllerMode>Relative two's comp</ControllerMode>
+        <NoteMode>Trigger</NoteMode>
+        <Channel>0</Channel>
+        <CCNumberOrNote>41</CCNumberOrNote>
         <Min>0.0</Min><Max>1.0</Max>
       </MidiMapping></MidiMappings>
     </ActionMapping>
     <ActionMapping>
       <Action>GUI:Middle Frame:Show Pattern Editor [Trigger]</Action>
       <MidiMappings><MidiMapping>
-        <MappingMode>Notes</MappingMode><ControllerMode>Relative two's comp</ControllerMode>
-        <NoteMode>Trigger</NoteMode><Channel>9</Channel><CCNumberOrNote>42</CCNumberOrNote>
+        <MappingMode>Notes</MappingMode>
+        <ControllerMode>Relative two's comp</ControllerMode>
+        <NoteMode>Trigger</NoteMode>
+        <Channel>0</Channel>
+        <CCNumberOrNote>42</CCNumberOrNote>
         <Min>0.0</Min><Max>1.0</Max>
       </MidiMapping></MidiMappings>
     </ActionMapping>
     <ActionMapping>
       <Action>GUI:Middle Frame:Show Instrument Midi Editor [Trigger]</Action>
       <MidiMappings><MidiMapping>
-        <MappingMode>Notes</MappingMode><ControllerMode>Relative two's comp</ControllerMode>
-        <NoteMode>Trigger</NoteMode><Channel>9</Channel><CCNumberOrNote>43</CCNumberOrNote>
+        <MappingMode>Notes</MappingMode>
+        <ControllerMode>Relative two's comp</ControllerMode>
+        <NoteMode>Trigger</NoteMode>
+        <Channel>0</Channel>
+        <CCNumberOrNote>43</CCNumberOrNote>
+        <Min>0.0</Min><Max>1.0</Max>
+      </MidiMapping></MidiMappings>
+    </ActionMapping>
+    <ActionMapping>
+      <Action>Track Muting:Mute/Unmute:Track XX [Toggle]:Track #01 [Toggle]</Action>
+      <MidiMappings><MidiMapping>
+        <MappingMode>Notes</MappingMode>
+        <ControllerMode>Relative two's comp</ControllerMode>
+        <NoteMode>Value</NoteMode>
+        <Channel>0</Channel>
+        <CCNumberOrNote>44</CCNumberOrNote>
+        <Min>0.0</Min><Max>1.0</Max>
+      </MidiMapping></MidiMappings>
+    </ActionMapping>
+    <ActionMapping>
+      <Action>Track Muting:Mute/Unmute:Track XX [Toggle]:Track #02 [Toggle]</Action>
+      <MidiMappings><MidiMapping>
+        <MappingMode>Notes</MappingMode>
+        <ControllerMode>Relative two's comp</ControllerMode>
+        <NoteMode>Value</NoteMode>
+        <Channel>0</Channel>
+        <CCNumberOrNote>45</CCNumberOrNote>
+        <Min>0.0</Min><Max>1.0</Max>
+      </MidiMapping></MidiMappings>
+    </ActionMapping>
+    <ActionMapping>
+      <Action>Track Muting:Mute/Unmute:Track XX [Toggle]:Track #03 [Toggle]</Action>
+      <MidiMappings><MidiMapping>
+        <MappingMode>Notes</MappingMode>
+        <ControllerMode>Relative two's comp</ControllerMode>
+        <NoteMode>Value</NoteMode>
+        <Channel>0</Channel>
+        <CCNumberOrNote>46</CCNumberOrNote>
+        <Min>0.0</Min><Max>1.0</Max>
+      </MidiMapping></MidiMappings>
+    </ActionMapping>
+    <ActionMapping>
+      <Action>Track Muting:Mute/Unmute:Track XX [Toggle]:Track #04 [Toggle]</Action>
+      <MidiMappings><MidiMapping>
+        <MappingMode>Notes</MappingMode>
+        <ControllerMode>Relative two's comp</ControllerMode>
+        <NoteMode>Value</NoteMode>
+        <Channel>0</Channel>
+        <CCNumberOrNote>47</CCNumberOrNote>
+        <Min>0.0</Min><Max>1.0</Max>
+      </MidiMapping></MidiMappings>
+    </ActionMapping>
+    <ActionMapping>
+      <Action>Track Muting:Mute/Unmute:Track XX [Toggle]:Track #05 [Toggle]</Action>
+      <MidiMappings><MidiMapping>
+        <MappingMode>Notes</MappingMode>
+        <ControllerMode>Relative two's comp</ControllerMode>
+        <NoteMode>Value</NoteMode>
+        <Channel>0</Channel>
+        <CCNumberOrNote>48</CCNumberOrNote>
+        <Min>0.0</Min><Max>1.0</Max>
+      </MidiMapping></MidiMappings>
+    </ActionMapping>
+    <ActionMapping>
+      <Action>Track Muting:Mute/Unmute:Track XX [Toggle]:Track #06 [Toggle]</Action>
+      <MidiMappings><MidiMapping>
+        <MappingMode>Notes</MappingMode>
+        <ControllerMode>Relative two's comp</ControllerMode>
+        <NoteMode>Value</NoteMode>
+        <Channel>0</Channel>
+        <CCNumberOrNote>49</CCNumberOrNote>
+        <Min>0.0</Min><Max>1.0</Max>
+      </MidiMapping></MidiMappings>
+    </ActionMapping>
+    <ActionMapping>
+      <Action>Track Muting:Mute/Unmute:Track XX [Toggle]:Track #07 [Toggle]</Action>
+      <MidiMappings><MidiMapping>
+        <MappingMode>Notes</MappingMode>
+        <ControllerMode>Relative two's comp</ControllerMode>
+        <NoteMode>Value</NoteMode>
+        <Channel>0</Channel>
+        <CCNumberOrNote>50</CCNumberOrNote>
+        <Min>0.0</Min><Max>1.0</Max>
+      </MidiMapping></MidiMappings>
+    </ActionMapping>
+    <ActionMapping>
+      <Action>Track Muting:Mute/Unmute:Track XX [Toggle]:Track #08 [Toggle]</Action>
+      <MidiMappings><MidiMapping>
+        <MappingMode>Notes</MappingMode>
+        <ControllerMode>Relative two's comp</ControllerMode>
+        <NoteMode>Value</NoteMode>
+        <Channel>0</Channel>
+        <CCNumberOrNote>51</CCNumberOrNote>
         <Min>0.0</Min><Max>1.0</Max>
       </MidiMapping></MidiMappings>
     </ActionMapping>
