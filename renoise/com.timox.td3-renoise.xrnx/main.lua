@@ -448,14 +448,52 @@ local function preview_stop()
     renoise.tool():remove_timer(_preview_timer)
   end
   _preview_timer = nil
+  unwatch_renoise_transport()
   if _preview_state and _preview_state.out then
     all_notes_off(_preview_state.out)
   end
   _preview_state = nil
 end
 
+-- Quand Renoise est en lecture et qu'il envoie MIDI Clock Master vers le
+-- port TD-3, la TD-3 reçoit aussi MIDI Start (FA) et lance son séquenceur
+-- interne en parallèle de nos Note On — d'où le mélange "pattern que je
+-- ne connais pas" + nos notes. On neutralise en envoyant MIDI Stop (FC)
+-- au démarrage du Preview, puis on hooke transport.playing : si
+-- l'utilisateur relance Renoise pendant la prise, on re-Stop la TD-3.
+local _transport_handler = nil
+
+local function inhibit_td3_sequencer(out)
+  if out then out:send { 0xFC } end  -- MIDI Real-Time Stop
+end
+
+local function watch_renoise_transport(out)
+  if _transport_handler then return end
+  local song = renoise.song()
+  _transport_handler = function()
+    if song.transport.playing then
+      inhibit_td3_sequencer(out)
+    end
+  end
+  song.transport.playing_observable:add_notifier(_transport_handler)
+end
+
+local function unwatch_renoise_transport()
+  if not _transport_handler then return end
+  local song = renoise.song()
+  if song.transport.playing_observable:has_notifier(_transport_handler) then
+    song.transport.playing_observable:remove_notifier(_transport_handler)
+  end
+  _transport_handler = nil
+end
+
+
 local function preview_start(get_step, step_ms, normal_vel, accent_vel, loop, out)
   preview_stop()
+  -- Coupe le séquenceur interne TD-3 + arme un hook sur Renoise transport
+  -- pour re-couper à chaque Renoise Play tant que ce Preview tourne.
+  inhibit_td3_sequencer(out)
+  watch_renoise_transport(out)
   -- active_notes : pile des Note On envoyés sans Note Off correspondant.
   -- Une chaîne de slides empile plusieurs notes sans les relâcher pour
   -- garder le gate TD-3 ouvert (= legato). Sur le premier step non-slide
@@ -632,7 +670,12 @@ local function show_dialog()
     local step_ms = PREFS.preview_step_ms.value
     if PREFS.sync_bpm.value then
       local rate = STEP_RATES[PREFS.step_rate_index.value] or STEP_RATES[3]
-      step_ms = math.floor(15000 / (renoise.song().transport.bpm * rate.mult) + 0.5)
+      -- Binaire : 16 steps / mesure = 1/16 par step = 15000/BPM ms
+      -- Triplet : 12 steps / mesure = triplet 1/8 par step = 20000/BPM ms
+      -- (chaque step ternaire = 4/3 d'un step binaire 1/16)
+      local base = 15000 / renoise.song().transport.bpm
+      if PREFS.triplet.value then base = base * 4 / 3 end
+      step_ms = math.floor(base / rate.mult + 0.5)
     end
     local function read_step(i) return step_to_td3(state.steps[i]) end
     local function go()
