@@ -168,6 +168,46 @@ td3 syx-to-yaml banque_complete.syx --out yaml_dir
 # → yaml_dir/I-1A.yml, yaml_dir/I-2A.yml, ...
 ```
 
+## Gérer les fichiers `.seq` (export Synthtribe « Export »)
+
+Un `.seq` contient **un seul pattern** ; contrairement au `.sqs`, le
+slot cible n'est **pas** dans le fichier (il n'était que dans le nom de
+fichier côté Synthtribe). On le passe donc explicitement via `--slot`
+(forme `IV-1A`, défaut `I-1A`).
+
+```powershell
+# Décoder un .seq trouvé en ligne vers YAML lisible
+td3 seq-to-yaml IVA.seq --slot IV-1A --out iva.yml
+
+# Envoyer un .seq directement dans un slot de la TD-3
+td3 send-seq IVA.seq --port "TD-3" --slot IV-1A
+```
+
+Utile pour injecter des `.seq` récupérés ailleurs sans passer par
+Synthtribe. Le même décodage est disponible nativement dans le tool
+Renoise (bibliothèque unifiée, format auto-détecté).
+
+## Flasher une track (chaîne de patterns)
+
+```powershell
+td3 send-track track.yml --port "TD-3"
+```
+
+`track.yml` :
+
+```yaml
+name: "Mon set acid"
+group: I                                  # I..IV
+patterns:
+  - patterns/library/01_acid_classic.yml
+  - patterns/library/03_octave_jump.yml
+```
+
+Chaque pattern est écrit dans un slot consécutif du groupe, puis la
+commande **imprime l'ordre de chaînage à reproduire manuellement** en
+mode TRACK WRITE sur la façade (le chaînage n'a aucun opcode SysEx
+connu).
+
 ## Monitorer le trafic MIDI vers la TD-3
 
 ```powershell
