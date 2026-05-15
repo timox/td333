@@ -699,21 +699,6 @@ local function show_dialog()
     pcall(function() renoise.song().transport:stop_sample_recording() end)
   end
 
-  -- Try to select the TD-3 internal slot via standard MIDI Program Change.
-  -- Behringer doesn't document this but many TB-303 clones accept PC for
-  -- pattern selection. PC value = group*16 + pattern (0..63).
-  local function send_program_change_for_slot()
-    local out = get_midi_out(PREFS.midi_out_name.value)
-    if not out then renoise.app():show_warning("Pas de port MIDI OUT.") return end
-    local ch   = (PREFS.midi_channel.value - 1) % 16
-    local slot = (PREFS.group_index.value - 1) * 16 + (PREFS.pattern_index.value - 1)
-    out:send { 0xC0 + ch, slot }
-    renoise.app():show_status(string.format(
-      "Program Change %d envoyé (slot %s/%s) — non documenté, à vérifier à l'oreille.",
-      slot, td3.GROUP_LABELS[PREFS.group_index.value],
-      td3.format_pattern_label(PREFS.pattern_index.value - 1)))
-  end
-
   -- Two preview launchers: immediate or aligned to Renoise's next pattern
   -- boundary. Sync=line 0 of the playing pattern.
   local function launch_preview(synced)
@@ -843,6 +828,75 @@ local function show_dialog()
     renoise.app():show_status(string.format(
       "Pattern chargé (%s) — slot d'origine %s / %s",
       path, td3.GROUP_LABELS[g + 1] or "?", td3.format_pattern_label(p)))
+  end
+
+  -- Données brutes du pattern courant (bloc 112 octets) à partir de la grille.
+  local function current_data()
+    local td3_steps = {}
+    for i = 1, STEPS do td3_steps[i] = step_to_td3(state.steps[i]) end
+    return td3.encode_data(td3_steps, PREFS.triplet.value, STEPS)
+  end
+
+  local function read_file_bytes(extensions, title)
+    local path = renoise.app():prompt_for_filename_to_read(extensions, title)
+    if not path or path == "" then return nil end
+    local f, err = io.open(path, "rb")
+    if not f then
+      renoise.app():show_warning("Lecture impossible : " .. tostring(err))
+      return nil
+    end
+    local raw = f:read("*a"); f:close()
+    return raw, path
+  end
+
+  local function write_file_bytes(ext, title, binstr)
+    local path = renoise.app():prompt_for_filename_to_write(ext, title)
+    if not path or path == "" then return end
+    local f, err = io.open(path, "wb")
+    if not f then
+      renoise.app():show_warning("Écriture impossible : " .. tostring(err))
+      return
+    end
+    f:write(binstr); f:close()
+    renoise.app():show_status("Enregistré : " .. path)
+  end
+
+  local function load_seq_file()
+    local raw, path = read_file_bytes({ "seq" }, "Charger un pattern (.seq)")
+    if not raw then return end
+    local data, e2 = td3.read_seq(binstr_to_bytes(raw))
+    if not data then
+      renoise.app():show_warning("Fichier .seq invalide : " .. tostring(e2))
+      return
+    end
+    apply_decoded_to_steps(state.steps, td3.decode_data(data))
+    repaint_all(); on_change()
+    renoise.app():show_status("Pattern .seq chargé : " .. path)
+  end
+
+  local function load_yaml_file()
+    local raw, path = read_file_bytes({ "yml", "yaml" }, "Charger un pattern (.yml)")
+    if not raw then return end
+    local ok, decoded = pcall(td3.parse_yaml_pattern, raw)
+    if not ok or not decoded then
+      renoise.app():show_warning("YAML illisible : " .. tostring(decoded))
+      return
+    end
+    apply_decoded_to_steps(state.steps, decoded)
+    repaint_all(); on_change()
+    renoise.app():show_status("Pattern .yml chargé : " .. path)
+  end
+
+  local function save_seq_file()
+    write_file_bytes("seq", "Enregistrer le pattern (.seq)",
+      bytes_to_binstr(td3.write_seq(current_data())))
+  end
+
+  local function save_yaml_file()
+    local decoded = td3.decode_data(current_data())
+    local yaml = td3.pattern_to_yaml(PREFS.group_index.value - 1,
+      PREFS.pattern_index.value - 1, decoded)
+    write_file_bytes("yml", "Enregistrer le pattern (.yml)", yaml)
   end
 
   -- TD-3 range : C1..C4 = MIDI 24..60. La 4e octave ne couvre que C —
@@ -1074,9 +1128,6 @@ local function show_dialog()
                 notifier = function()
                   if start_recording() then launch_preview(true) end
                 end },
-    vb:button { text = "Sel slot", width = 70,
-                tooltip = "Envoie un Program Change pour sélectionner le slot courant sur la TD-3. Mode A : la TD-3 jouera ce slot quand elle reçoit MIDI Start. PC non documenté par Behringer — à tester.",
-                notifier = send_program_change_for_slot },
     vb:checkbox { value = PREFS.loop.value,
                   notifier = function(v) PREFS.loop.value = v end },
     vb:text { text = "loop" },
@@ -1128,17 +1179,34 @@ local function show_dialog()
                 notifier = function() transpose_all(12) end },
   }
 
-  local toolbar_lib = vb:row {
-    vb:text { text = "Bibliothèque", width = 90 },
-    vb:button { text = "Charger .syx…", width = 110,
-                tooltip = "Charge un pattern .syx local dans la grille (autonome, sans l'utilitaire Python).",
+  -- Utilitaire intégré : import/export local .syx/.seq/.yml, équivalent Lua
+  -- du CLI td3 — l'outil Renoise est autonome (aucune dépendance Python).
+  local toolbar_load = vb:row {
+    vb:text { text = "Charger", width = 90 },
+    vb:button { text = ".syx", width = 70,
+                tooltip = "Charge un dump SysEx .syx (F0…F7, opcode 0x78).",
                 notifier = load_pattern_file },
-    vb:button { text = "Enregistrer .syx…", width = 130,
-                tooltip = "Enregistre le pattern courant en .syx local (relisible ici ou envoyable via l'utilitaire td3).",
+    vb:button { text = ".seq", width = 70,
+                tooltip = "Charge un export Synthtribe .seq (magic 23 98 54 76).",
+                notifier = load_seq_file },
+    vb:button { text = ".yml", width = 70,
+                tooltip = "Charge un pattern au format YAML du CLI td3.",
+                notifier = load_yaml_file },
+  }
+  local toolbar_save = vb:row {
+    vb:text { text = "Enregistrer", width = 90 },
+    vb:button { text = ".syx", width = 70,
+                tooltip = "Exporte le pattern courant en SysEx .syx.",
                 notifier = save_pattern_file },
+    vb:button { text = ".seq", width = 70,
+                tooltip = "Exporte en .seq (envoyable ensuite via `td3 send-seq`).",
+                notifier = save_seq_file },
+    vb:button { text = ".yml", width = 70,
+                tooltip = "Exporte au format YAML lisible du CLI td3.",
+                notifier = save_yaml_file },
   }
 
-  local content_items = { toolbar1, toolbar2, toolbar_cfg, toolbar_cutoff, toolbar3, toolbar_transpose, toolbar_lib, vb:space { height = 6 } }
+  local content_items = { toolbar1, toolbar2, toolbar_cfg, toolbar_cutoff, toolbar3, toolbar_transpose, toolbar_load, toolbar_save, vb:space { height = 6 } }
   for _, r in ipairs(oct_rows)   do table.insert(content_items, r) end
   table.insert(content_items, vb:space { height = 4 })
   for _, r in ipairs(pitch_rows) do table.insert(content_items, r) end
