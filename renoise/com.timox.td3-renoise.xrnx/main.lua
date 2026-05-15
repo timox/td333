@@ -730,6 +730,30 @@ local function show_dialog()
     persist(); rebuild_sysex_view()
   end
 
+  -- Transpose tous les steps non-rest de `delta` demi-tons, en clampant
+  -- à la plage TD-3 (C1..C4 = index absolu 0..36). idx = (oct-1)*12 +
+  -- (semi-1) ; on borne avant de re-décomposer en oct/semi.
+  local function transpose_all(delta)
+    local clamped = false
+    for i = 1, STEPS do
+      local s = state.steps[i]
+      if s.semi > 0 then
+        local oct = s.oct > 0 and s.oct or 2
+        local idx = (oct - 1) * 12 + (s.semi - 1) + delta
+        if idx < 0 then idx = 0; clamped = true end
+        if idx > 36 then idx = 36; clamped = true end
+        s.oct  = math.floor(idx / 12) + 1
+        s.semi = (idx % 12) + 1
+      end
+    end
+    repaint_all()
+    persist(); rebuild_sysex_view()
+    if clamped then
+      renoise.app():show_status(
+        "Transpose : certaines notes ont buté sur les bornes C1/C4")
+    end
+  end
+
   -- TD-3 range : C1..C4 = MIDI 24..60. La 4e octave ne couvre que C —
   -- toute autre note à OCT 4 déborde et serait clampée. On corrige donc
   -- automatiquement les combinaisons invalides à la saisie pour que ce
@@ -1000,7 +1024,20 @@ local function show_dialog()
   }
 
   -- Assemble ----------------------------------------------------------------
-  local content_items = { toolbar1, toolbar2, toolbar_cfg, toolbar_cutoff, toolbar3, vb:space { height = 6 } }
+  -- Barre de transpose : décalage demi-tons / octaves sur tout le pattern
+  local toolbar_transpose = vb:row {
+    vb:text { text = "Transpose", width = 70 },
+    vb:button { text = "−12", width = 44, tooltip = "−1 octave",
+                notifier = function() transpose_all(-12) end },
+    vb:button { text = "−1",  width = 40, tooltip = "−1 demi-ton",
+                notifier = function() transpose_all(-1) end },
+    vb:button { text = "+1",  width = 40, tooltip = "+1 demi-ton",
+                notifier = function() transpose_all(1) end },
+    vb:button { text = "+12", width = 44, tooltip = "+1 octave",
+                notifier = function() transpose_all(12) end },
+  }
+
+  local content_items = { toolbar1, toolbar2, toolbar_cfg, toolbar_cutoff, toolbar3, toolbar_transpose, vb:space { height = 6 } }
   for _, r in ipairs(oct_rows)   do table.insert(content_items, r) end
   table.insert(content_items, vb:space { height = 4 })
   for _, r in ipairs(pitch_rows) do table.insert(content_items, r) end
