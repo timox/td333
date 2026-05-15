@@ -276,6 +276,24 @@ local function pitch_to_oct_semi(storage)
   return math.floor(storage / 12), (storage % 12) + 1
 end
 
+--- Recopie un pattern décodé (td3.decode_data) dans la grille de l'éditeur.
+-- Partagé entre "Read TD-3" (SysEx live) et "Load .syx" (fichier local).
+local function apply_decoded_to_steps(state_steps, decoded)
+  PREFS.triplet.value = decoded.triplet
+  for i = 1, td3.STEPS do
+    local oct, semi = pitch_to_oct_semi(decoded.pitches[i])
+    if decoded.rest_mask[i] then
+      state_steps[i] = { oct = 0, semi = 0,
+                         accent = decoded.accent[i] ~= 0,
+                         slide  = decoded.slide[i]  ~= 0 }
+    else
+      state_steps[i] = { oct = oct, semi = semi,
+                         accent = decoded.accent[i] ~= 0,
+                         slide  = decoded.slide[i]  ~= 0 }
+    end
+  end
+end
+
 --- Pull a pattern from the TD-3 and fill the editor grid.
 local function read_pattern_from_td3(state_steps, group, pat, on_done)
   local out = get_midi_out(PREFS.midi_out_name.value)
@@ -305,19 +323,7 @@ local function read_pattern_from_td3(state_steps, group, pat, on_done)
       return
     end
     local decoded = td3.decode_data(got.data)
-    PREFS.triplet.value = decoded.triplet
-    for i = 1, td3.STEPS do
-      local oct, semi = pitch_to_oct_semi(decoded.pitches[i])
-      if decoded.rest_mask[i] then
-        state_steps[i] = { oct = 0, semi = 0,
-                           accent = decoded.accent[i] ~= 0,
-                           slide  = decoded.slide[i]  ~= 0 }
-      else
-        state_steps[i] = { oct = oct, semi = semi,
-                           accent = decoded.accent[i] ~= 0,
-                           slide  = decoded.slide[i]  ~= 0 }
-      end
-    end
+    apply_decoded_to_steps(state_steps, decoded)
     if on_done then on_done(decoded) end
   end
   renoise.tool():add_timer(timer, 500)
@@ -439,16 +445,16 @@ local watch_renoise_transport
 local unwatch_renoise_transport
 
 local function all_notes_off(out)
-  -- Belt and suspenders : Note OFF for every possible pitch, then CC 123
-  -- (All Notes Off), CC 120 (All Sound Off), and the MIDI System Real-Time
-  -- Stop (0xFC) to halt any internal sequencer that may have been started.
+  -- Note OFF pour toutes les pitches + CC 123 (All Notes Off) + CC 120
+  -- (All Sound Off). On N'ENVOIE PAS de MIDI Stop (0xFC) : en clock
+  -- source MIDI USB la TD-3 passe en "stopped" et ignore ensuite les
+  -- notes/CC entrants (régression cutoff + slide constatée).
   if not out then return end
   for n = 0, 127 do
     send_short(out, 0x80, n, 0x40)
   end
   send_short(out, 0xB0, 123, 0)
   send_short(out, 0xB0, 120, 0)
-  out:send { 0xFC }  -- MIDI Stop (system real-time, no channel)
 end
 
 local function preview_stop()
@@ -456,7 +462,7 @@ local function preview_stop()
     renoise.tool():remove_timer(_preview_timer)
   end
   _preview_timer = nil
-  unwatch_renoise_transport()
+  unwatch_renoise_transport()  -- no-op si jamais armé
   if _preview_state and _preview_state.out then
     all_notes_off(_preview_state.out)
   end
@@ -497,10 +503,12 @@ end
 
 local function preview_start(get_step, step_ms, normal_vel, accent_vel, loop, out)
   preview_stop()
-  -- Coupe le séquenceur interne TD-3 + arme un hook sur Renoise transport
-  -- pour re-couper à chaque Renoise Play tant que ce Preview tourne.
-  inhibit_td3_sequencer(out)
-  watch_renoise_transport(out)
+  -- NB : on n'envoie PLUS de MIDI Stop (0xFC) automatique ici. En clock
+  -- source MIDI USB, la TD-3 passe en "stopped" sur 0xFC et ignore alors
+  -- les notes ET les CC entrants → on perdait cutoff + slide. Pour éviter
+  -- que le séquenceur interne TD-3 se lance en parallèle, désactiver
+  -- "MIDI Clock Master Output" vers le port TD-3 dans
+  -- Edit → Preferences → MIDI côté Renoise (solution propre et permanente).
   -- active_notes : pile des Note On envoyés sans Note Off correspondant.
   -- Une chaîne de slides empile plusieurs notes sans les relâcher pour
   -- garder le gate TD-3 ouvert (= legato). Sur le premier step non-slide
@@ -567,6 +575,43 @@ local function build_sysex(steps, group_index, pattern_index, triplet)
   for i = 1, STEPS do td3_steps[i] = step_to_td3(steps[i]) end
   local data = td3.encode_data(td3_steps, triplet, STEPS)
   return td3.to_sysex(group_index - 1, pattern_index - 1, data)
+end
+
+-- Bibliothèque locale : lecture / écriture de patterns en .syx, sans
+-- passer par l'utilitaire Python. Le tool Renoise est ainsi autonome —
+-- td3.lua produit et relit le SysEx natif de la TD-3.
+
+local function bytes_to_binstr(arr)
+  local t = {}
+  for i = 1, #arr do t[i] = string.char(arr[i] % 256) end
+  return table.concat(t)
+end
+
+local function binstr_to_bytes(str)
+  local t = {}
+  for i = 1, #str do t[i] = str:byte(i) end
+  return t
+end
+
+-- Extrait la première trame F0..F7 qui est un dump pattern (opcode 0x78).
+-- Tolère un .syx contenant plusieurs messages (config, firmware, etc.).
+local function extract_pattern_sysex(bytes)
+  local n, i = #bytes, 1
+  while i <= n do
+    if bytes[i] == 0xF0 then
+      for j = i, n do
+        if bytes[j] == 0xF7 then
+          local frame = {}
+          for k = i, j do frame[#frame + 1] = bytes[k] end
+          if frame[8] == td3.OP_WRITE then return frame end
+          i = j
+          break
+        end
+      end
+    end
+    i = i + 1
+  end
+  return nil
 end
 
 local function chunk_hex(arr, per_line)
@@ -752,6 +797,52 @@ local function show_dialog()
       renoise.app():show_status(
         "Transpose : certaines notes ont buté sur les bornes C1/C4")
     end
+  end
+
+  -- Bibliothèque locale -----------------------------------------------------
+  local function save_pattern_file()
+    local path = renoise.app():prompt_for_filename_to_write(
+      "syx", "Enregistrer le pattern (.syx)")
+    if not path or path == "" then return end
+    local sysex = build_sysex(state.steps, PREFS.group_index.value,
+                              PREFS.pattern_index.value, PREFS.triplet.value)
+    local f, err = io.open(path, "wb")
+    if not f then
+      renoise.app():show_warning("Écriture impossible : " .. tostring(err))
+      return
+    end
+    f:write(bytes_to_binstr(sysex))
+    f:close()
+    renoise.app():show_status("Pattern enregistré : " .. path)
+  end
+
+  local function load_pattern_file()
+    local path = renoise.app():prompt_for_filename_to_read(
+      { "syx" }, "Charger un pattern (.syx)")
+    if not path or path == "" then return end
+    local f, err = io.open(path, "rb")
+    if not f then
+      renoise.app():show_warning("Lecture impossible : " .. tostring(err))
+      return
+    end
+    local raw = f:read("*a")
+    f:close()
+    local frame = extract_pattern_sysex(binstr_to_bytes(raw))
+    if not frame then
+      renoise.app():show_warning(
+        "Aucun dump pattern TD-3 (SysEx 0x78) trouvé dans ce fichier .syx.")
+      return
+    end
+    local g, p, data = td3.parse_sysex_pattern(frame)
+    if not data then
+      renoise.app():show_warning("SysEx pattern invalide : " .. tostring(p))
+      return
+    end
+    apply_decoded_to_steps(state.steps, td3.decode_data(data))
+    repaint_all(); on_change()
+    renoise.app():show_status(string.format(
+      "Pattern chargé (%s) — slot d'origine %s / %s",
+      path, td3.GROUP_LABELS[g + 1] or "?", td3.format_pattern_label(p)))
   end
 
   -- TD-3 range : C1..C4 = MIDI 24..60. La 4e octave ne couvre que C —
@@ -1037,7 +1128,17 @@ local function show_dialog()
                 notifier = function() transpose_all(12) end },
   }
 
-  local content_items = { toolbar1, toolbar2, toolbar_cfg, toolbar_cutoff, toolbar3, toolbar_transpose, vb:space { height = 6 } }
+  local toolbar_lib = vb:row {
+    vb:text { text = "Bibliothèque", width = 90 },
+    vb:button { text = "Charger .syx…", width = 110,
+                tooltip = "Charge un pattern .syx local dans la grille (autonome, sans l'utilitaire Python).",
+                notifier = load_pattern_file },
+    vb:button { text = "Enregistrer .syx…", width = 130,
+                tooltip = "Enregistre le pattern courant en .syx local (relisible ici ou envoyable via l'utilitaire td3).",
+                notifier = save_pattern_file },
+  }
+
+  local content_items = { toolbar1, toolbar2, toolbar_cfg, toolbar_cutoff, toolbar3, toolbar_transpose, toolbar_lib, vb:space { height = 6 } }
   for _, r in ipairs(oct_rows)   do table.insert(content_items, r) end
   table.insert(content_items, vb:space { height = 4 })
   for _, r in ipairs(pitch_rows) do table.insert(content_items, r) end
