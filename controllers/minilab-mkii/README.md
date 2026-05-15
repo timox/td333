@@ -10,6 +10,26 @@ volume des 8 premières pistes.
 | `layout.png` | Plan visuel (qui fait quoi sur le clavier) |
 | `README.md` | Ce document |
 | `midi_dump.py` | Script pour identifier ce qu'envoie chaque contrôle |
+| `build_xrnm.py` | Construction assistée + validée du `.xrnm` (zéro saisie manuelle) |
+
+## Construire le mapping sans se planter
+
+`build_xrnm.py` supprime la transcription manuelle : il te demande
+fonction par fonction d'actionner le bon contrôle, **capture le MIDI
+réel**, te fait **confirmer**, détecte les **collisions** et **reprend**
+la ligne en cas d'erreur, puis écrit le `.xrnm` et le **revalide**.
+
+```bash
+pip install mido python-rtmidi
+python3 controllers/minilab-mkii/build_xrnm.py --port minilab --out controllers/minilab-mkii/minilab_renoise.xrnm
+# revalider un fichier existant :
+python3 controllers/minilab-mkii/build_xrnm.py --check controllers/minilab-mkii/minilab_renoise.xrnm
+```
+
+Cycle par ligne : actionne le contrôle → message capturé → `Entrée`=ok /
+`r`=refaire / `s`=sauter. Toute collision (même canal+note/CC déjà pris)
+force la reprise. En fin de course, rapport de validation (XML +
+absence de conflit).
 
 ## Identifier les contrôles (pads 9-16, etc.)
 
