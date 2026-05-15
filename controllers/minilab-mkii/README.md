@@ -9,6 +9,22 @@ volume des 8 premières pistes.
 | `minilab_renoise.xrnm` | Mapping MIDI à charger dans Renoise |
 | `layout.png` | Plan visuel (qui fait quoi sur le clavier) |
 | `README.md` | Ce document |
+| `midi_dump.py` | Script pour identifier ce qu'envoie chaque contrôle |
+
+## Identifier les contrôles (pads 9-16, etc.)
+
+Plutôt que le *Learn Mode* pad par pad, utilise le dumper :
+
+```bash
+pip install mido python-rtmidi      # ou : pip install -e ".[midi]"
+python3 controllers/minilab-mkii/midi_dump.py                 # liste les ports
+python3 controllers/minilab-mkii/midi_dump.py --port minilab  # écoute
+```
+
+Appuie/tourne chaque pad/knob : chaque message est décodé avec le
+canal, la note/CC **et la ligne `.xrnm` correspondante** déjà formatée.
+Le SysEx du bouton de banque s'affiche tagué « Arturia interne —
+ignorer ». Copie-colle la sortie et envoie-la pour étendre le mapping.
 
 ## Installation
 
