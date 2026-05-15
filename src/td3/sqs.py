@@ -20,7 +20,8 @@ from dataclasses import dataclass
 
 from .pattern import DATA_SIZE, Pattern
 
-MAGIC = b"\x87\x43\x91\x02"
+MAGIC = b"\x87\x43\x91\x02"          # .sqs : banque (64 patterns)
+SEQ_MAGIC = b"\x23\x98\x54\x76"      # .seq : pattern unique (export Synthtribe)
 RECORD_SIZE_FIELD = 0x70  # = DATA_SIZE
 
 
@@ -75,3 +76,27 @@ def write_sqs(sqs: SQSFile) -> bytes:
         out += struct.pack(">III", p.group, p.number, len(blk))
         out += blk
     return bytes(out)
+
+
+def read_seq(buf: bytes, group: int = 0, number: int = 0) -> Pattern:
+    """Read a single-pattern ``.seq`` export (Synthtribe "Export").
+
+    Layout : magic ``23 98 54 76``, UTF-16BE product + version strings,
+    uint32 size (0x70), then the 112-byte pattern data block. Unlike
+    ``.sqs`` there is no group/pattern prefix — the slot lives only in
+    the filename (e.g. ``IVA.seq``), so the caller passes the target
+    ``group``/``number`` (defaults to I-1A).
+    """
+    if buf[:4] != SEQ_MAGIC:
+        raise ValueError(f"not a .seq file (magic {buf[:4].hex()})")
+    off = 4
+    product, off = _read_utf16be_string(buf, off)
+    version, off = _read_utf16be_string(buf, off)
+    size = struct.unpack_from(">I", buf, off)[0]
+    off += 4
+    if size != DATA_SIZE:
+        raise ValueError(f"unexpected .seq record size {size} (expected {DATA_SIZE})")
+    blk = buf[off:off + size]
+    if len(blk) != DATA_SIZE:
+        raise ValueError(f"truncated .seq data ({len(blk)} bytes)")
+    return Pattern.from_bytes(group, number, blk)
