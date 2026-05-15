@@ -66,8 +66,12 @@ local PREFS = renoise.Document.create("Td3RenoisePrefs") {
   -- Mode MIDI-live (dialogue séparé) : état indépendant. Record étendu
   -- "o:s:a:l:r:c:d:g" (ratchet, cutoff CC74 ou -1, delay ms, gate %),
   -- MAX_STEPS pas, jamais écrit en mémoire TD-3.
+  -- Dossier "bibliothèque" : .syx/.seq/.yml/.yaml regroupés, sélection
+  -- directe dans l'outil (un seul browser, format auto-détecté).
+  library_path         = "",
+
   live_pattern_state   = "",
-  live_length          = 16,   -- 16 ou 32
+  live_length          = 32,   -- 16 ou 32 (éditeur MIDI-live = 32 par défaut)
   live_step_rate_index = 3,
   live_loop            = true,
   live_sync_bpm        = true,
@@ -640,6 +644,33 @@ local function extract_pattern_sysex(bytes)
   return nil
 end
 
+-- Un seul "browser" : on auto-détecte le format sur le CONTENU (les
+-- filtres d'extension des dialogues OS ne filtrent pas de façon fiable).
+-- Ordre : magic .seq → trame SysEx 0x78 → sinon texte YAML.
+local function lib_detect_decoded(raw)
+  local bytes = binstr_to_bytes(raw)
+  if #bytes >= 4 and bytes[1] == 0x23 and bytes[2] == 0x98
+     and bytes[3] == 0x54 and bytes[4] == 0x76 then
+    local data, e = td3.read_seq(bytes)
+    if data then return td3.decode_data(data) end
+    return nil, ".seq : " .. tostring(e)
+  end
+  local frame = extract_pattern_sysex(bytes)
+  if frame then
+    local _, _, data = td3.parse_sysex_pattern(frame)
+    if data then return td3.decode_data(data) end
+  end
+  local ok, dec = pcall(td3.parse_yaml_pattern, raw)
+  if ok and dec then return dec end
+  return nil, "format non reconnu (ni .seq, ni SysEx 0x78, ni YAML)"
+end
+
+-- Extension (minuscule, sans point) d'un chemin, ou "".
+local function path_ext(path)
+  return (path or ""):match("%.([%a]+)$") and
+         (path:match("%.([%a]+)$")):lower() or ""
+end
+
 local function chunk_hex(arr, per_line)
   per_line = per_line or 16
   local out, line = {}, {}
@@ -654,6 +685,24 @@ local function chunk_hex(arr, per_line)
 end
 
 -- Dialog --------------------------------------------------------------------
+
+-- Renoise n'expose pas de callback de fermeture de dialogue. On surveille
+-- donc la visibilité via app_idle : dès que la fenêtre passe à fermée, on
+-- coupe toutes les notes (panic) et on se désabonne. Indispensable : sans
+-- ça une note tenue (slide/legato) reste bloquée si on ferme en lecture.
+local function watch_dialog_close(get_dialog, cleanup)
+  local fn
+  fn = function()
+    local d = get_dialog()
+    if d and not d.visible then
+      pcall(cleanup)
+      if renoise.tool().app_idle_observable:has_notifier(fn) then
+        renoise.tool().app_idle_observable:remove_notifier(fn)
+      end
+    end
+  end
+  renoise.tool().app_idle_observable:add_notifier(fn)
+end
 
 local _dialog = nil
 
@@ -810,119 +859,69 @@ local function show_dialog()
     end
   end
 
-  -- Bibliothèque locale -----------------------------------------------------
-  local function save_pattern_file()
-    local path = renoise.app():prompt_for_filename_to_write(
-      "syx", "Enregistrer le pattern (.syx)")
-    if not path or path == "" then return end
-    local sysex = build_sysex(state.steps, PREFS.group_index.value,
-                              PREFS.pattern_index.value, PREFS.triplet.value)
-    local f, err = io.open(path, "wb")
-    if not f then
-      renoise.app():show_warning("Écriture impossible : " .. tostring(err))
-      return
-    end
-    f:write(bytes_to_binstr(sysex))
-    f:close()
-    renoise.app():show_status("Pattern enregistré : " .. path)
-  end
+  -- Bibliothèque unifiée ----------------------------------------------------
+  -- Un dossier dédié regroupe .syx/.seq/.yml/.yaml ; un seul "browser"
+  -- (popup du dossier + dialogue fichier) ; le format est auto-détecté
+  -- au chargement (contenu, pas extension) et choisi à l'enregistrement.
 
-  local function load_pattern_file()
-    local path = renoise.app():prompt_for_filename_to_read(
-      { "syx" }, "Charger un pattern (.syx)")
-    if not path or path == "" then return end
-    local f, err = io.open(path, "rb")
-    if not f then
-      renoise.app():show_warning("Lecture impossible : " .. tostring(err))
-      return
-    end
-    local raw = f:read("*a")
-    f:close()
-    local frame = extract_pattern_sysex(binstr_to_bytes(raw))
-    if not frame then
-      renoise.app():show_warning(
-        "Aucun dump pattern TD-3 (SysEx 0x78) trouvé dans ce fichier .syx.")
-      return
-    end
-    local g, p, data = td3.parse_sysex_pattern(frame)
-    if not data then
-      renoise.app():show_warning("SysEx pattern invalide : " .. tostring(p))
-      return
-    end
-    apply_decoded_to_steps(state.steps, td3.decode_data(data))
-    repaint_all(); on_change()
-    renoise.app():show_status(string.format(
-      "Pattern chargé (%s) — slot d'origine %s / %s",
-      path, td3.GROUP_LABELS[g + 1] or "?", td3.format_pattern_label(p)))
-  end
-
-  -- Données brutes du pattern courant (bloc 112 octets) à partir de la grille.
+  -- Bloc 112 octets du pattern courant à partir de la grille.
   local function current_data()
     local td3_steps = {}
     for i = 1, STEPS do td3_steps[i] = step_to_td3(state.steps[i]) end
     return td3.encode_data(td3_steps, PREFS.triplet.value, STEPS)
   end
 
-  local function read_file_bytes(extensions, title)
-    local path = renoise.app():prompt_for_filename_to_read(extensions, title)
-    if not path or path == "" then return nil end
+  local function lib_serialize(fmt)
+    if fmt == "seq" then
+      return bytes_to_binstr(td3.write_seq(current_data()))
+    elseif fmt == "yml" or fmt == "yaml" then
+      return td3.pattern_to_yaml(PREFS.group_index.value - 1,
+        PREFS.pattern_index.value - 1, td3.decode_data(current_data()))
+    end
+    return bytes_to_binstr(build_sysex(state.steps, PREFS.group_index.value,
+      PREFS.pattern_index.value, PREFS.triplet.value))   -- défaut : .syx
+  end
+
+  local function lib_load_path(path)
+    if not path or path == "" then return end
     local f, err = io.open(path, "rb")
     if not f then
       renoise.app():show_warning("Lecture impossible : " .. tostring(err))
-      return nil
+      return
     end
     local raw = f:read("*a"); f:close()
-    return raw, path
+    local decoded, e = lib_detect_decoded(raw)
+    if not decoded then
+      renoise.app():show_warning("Chargement impossible : " .. tostring(e))
+      return
+    end
+    apply_decoded_to_steps(state.steps, decoded)
+    repaint_all(); on_change()
+    renoise.app():show_status("Chargé : " .. path)
   end
 
-  local function write_file_bytes(ext, title, binstr)
-    local path = renoise.app():prompt_for_filename_to_write(ext, title)
+  local function lib_save_path(path, fmt)
     if not path or path == "" then return end
+    local ext = path_ext(path)
+    if ext == "" then ext = fmt end          -- nom sans extension → format choisi
     local f, err = io.open(path, "wb")
     if not f then
       renoise.app():show_warning("Écriture impossible : " .. tostring(err))
       return
     end
-    f:write(binstr); f:close()
-    renoise.app():show_status("Enregistré : " .. path)
+    f:write(lib_serialize(ext)); f:close()
+    renoise.app():show_status("Enregistré (" .. ext .. ") : " .. path)
   end
 
-  local function load_seq_file()
-    local raw, path = read_file_bytes({ "seq" }, "Charger un pattern (.seq)")
-    if not raw then return end
-    local data, e2 = td3.read_seq(binstr_to_bytes(raw))
-    if not data then
-      renoise.app():show_warning("Fichier .seq invalide : " .. tostring(e2))
-      return
-    end
-    apply_decoded_to_steps(state.steps, td3.decode_data(data))
-    repaint_all(); on_change()
-    renoise.app():show_status("Pattern .seq chargé : " .. path)
-  end
-
-  local function load_yaml_file()
-    local raw, path = read_file_bytes({ "yml", "yaml" }, "Charger un pattern (.yml)")
-    if not raw then return end
-    local ok, decoded = pcall(td3.parse_yaml_pattern, raw)
-    if not ok or not decoded then
-      renoise.app():show_warning("YAML illisible : " .. tostring(decoded))
-      return
-    end
-    apply_decoded_to_steps(state.steps, decoded)
-    repaint_all(); on_change()
-    renoise.app():show_status("Pattern .yml chargé : " .. path)
-  end
-
-  local function save_seq_file()
-    write_file_bytes("seq", "Enregistrer le pattern (.seq)",
-      bytes_to_binstr(td3.write_seq(current_data())))
-  end
-
-  local function save_yaml_file()
-    local decoded = td3.decode_data(current_data())
-    local yaml = td3.pattern_to_yaml(PREFS.group_index.value - 1,
-      PREFS.pattern_index.value - 1, decoded)
-    write_file_bytes("yml", "Enregistrer le pattern (.yml)", yaml)
+  local function lib_list_files()
+    local dir = PREFS.library_path.value
+    if dir == "" then return {} end
+    local ok, names = pcall(function()
+      return os.filenames(dir, { "*.syx", "*.seq", "*.yml", "*.yaml" })
+    end)
+    if not ok or type(names) ~= "table" then return {} end
+    table.sort(names)
+    return names
   end
 
   -- TD-3 range : C1..C4 = MIDI 24..60. La 4e octave ne couvre que C —
@@ -1205,34 +1204,59 @@ local function show_dialog()
                 notifier = function() transpose_all(12) end },
   }
 
-  -- Utilitaire intégré : import/export local .syx/.seq/.yml, équivalent Lua
-  -- du CLI td3 — l'outil Renoise est autonome (aucune dépendance Python).
-  local toolbar_load = vb:row {
-    vb:text { text = "Charger", width = 90 },
-    vb:button { text = ".syx", width = 70,
-                tooltip = "Charge un dump SysEx .syx (F0…F7, opcode 0x78).",
-                notifier = load_pattern_file },
-    vb:button { text = ".seq", width = 70,
-                tooltip = "Charge un export Synthtribe .seq (magic 23 98 54 76).",
-                notifier = load_seq_file },
-    vb:button { text = ".yml", width = 70,
-                tooltip = "Charge un pattern au format YAML du CLI td3.",
-                notifier = load_yaml_file },
-  }
-  local toolbar_save = vb:row {
-    vb:text { text = "Enregistrer", width = 90 },
-    vb:button { text = ".syx", width = 70,
-                tooltip = "Exporte le pattern courant en SysEx .syx.",
-                notifier = save_pattern_file },
-    vb:button { text = ".seq", width = 70,
-                tooltip = "Exporte en .seq (envoyable ensuite via `td3 send-seq`).",
-                notifier = save_seq_file },
-    vb:button { text = ".yml", width = 70,
-                tooltip = "Exporte au format YAML lisible du CLI td3.",
-                notifier = save_yaml_file },
+  -- Bibliothèque : un dossier dédié + UN seul browser multi-format. Le
+  -- format est auto-détecté à la lecture (contenu) et choisi via le popup
+  -- à l'écriture. Équivalent Lua autonome du CLI td3 (zéro dépendance).
+  local lib_items = lib_list_files()
+  if #lib_items == 0 then lib_items = { "(dossier vide / non défini)" } end
+  local lib_popup = vb:popup { items = lib_items, value = 1, width = 240 }
+  local function refresh_lib()
+    local f = lib_list_files()
+    if #f == 0 then f = { "(dossier vide / non défini)" } end
+    lib_popup.items = f
+    lib_popup.value = 1
+  end
+  local fmt_popup = vb:popup { items = { "syx", "seq", "yml" },
+                               value = 1, width = 56 }
+
+  local toolbar_lib = vb:row {
+    vb:text { text = "Biblio", width = 50 },
+    vb:button { text = "Dossier…", width = 76,
+      tooltip = "Choisir le dossier qui regroupe vos .syx/.seq/.yml/.yaml.",
+      notifier = function()
+        local p = renoise.app():prompt_for_path("Dossier bibliothèque TD-3")
+        if p and p ~= "" then PREFS.library_path.value = p; refresh_lib() end
+      end },
+    lib_popup,
+    vb:button { text = "↻", width = 26, tooltip = "Rafraîchir la liste",
+      notifier = refresh_lib },
+    vb:button { text = "Charger", width = 64,
+      notifier = function()
+        local dir  = PREFS.library_path.value:gsub("[/\\]$", "")
+        local name = lib_popup.items[lib_popup.value]
+        if dir == "" or not name or name:sub(1, 1) == "(" then
+          renoise.app():show_warning(
+            "Définissez un dossier puis sélectionnez un fichier.")
+          return
+        end
+        lib_load_path(dir .. "/" .. name)
+      end },
+    vb:button { text = "Fichier…", width = 72,
+      tooltip = "Browser unique : .syx, .seq, .yml ou .yaml — format auto-détecté.",
+      notifier = function()
+        lib_load_path(renoise.app():prompt_for_filename_to_read(
+          { "syx", "seq", "yml", "yaml" }, "Charger un pattern"))
+      end },
+    vb:button { text = "Enregistrer…", width = 96,
+      notifier = function()
+        local fmt = ({ "syx", "seq", "yml" })[fmt_popup.value] or "syx"
+        lib_save_path(renoise.app():prompt_for_filename_to_write(
+          fmt, "Enregistrer le pattern"), fmt)
+      end },
+    fmt_popup,
   }
 
-  local content_items = { toolbar1, toolbar2, toolbar_cfg, toolbar_cutoff, toolbar3, toolbar_transpose, toolbar_load, toolbar_save, vb:space { height = 6 } }
+  local content_items = { toolbar1, toolbar2, toolbar_cfg, toolbar_cutoff, toolbar3, toolbar_transpose, toolbar_lib, vb:space { height = 6 } }
   for _, r in ipairs(oct_rows)   do table.insert(content_items, r) end
   table.insert(content_items, vb:space { height = 4 })
   for _, r in ipairs(pitch_rows) do table.insert(content_items, r) end
@@ -1250,6 +1274,11 @@ local function show_dialog()
   repaint_all(); rebuild_sysex_view()
   if _dialog and _dialog.visible then _dialog:close() end
   _dialog = renoise.app():show_custom_dialog("TD-3 Pattern Editor", content)
+  watch_dialog_close(function() return _dialog end, function()
+    preview_stop()
+    local out = get_midi_out(PREFS.midi_out_name.value)
+    if out then all_notes_off(out) end
+  end)
 end
 
 -- ===========================================================================
@@ -1271,11 +1300,6 @@ local function new_live_steps()
              delay = FX_DEFAULT.delay, gate = FX_DEFAULT.gate }
   end
   return t
-end
-
-local function step_has_fx(s)
-  return s.ratchet ~= FX_DEFAULT.ratchet or s.cutoff ~= FX_DEFAULT.cutoff
-      or s.delay ~= FX_DEFAULT.delay or s.gate ~= FX_DEFAULT.gate
 end
 
 local function live_steps_to_string(steps)
@@ -1463,16 +1487,19 @@ local function lp_export_to_track(steps, length)
     if seqtrk.type ~= renoise.Track.TRACK_TYPE_SEQUENCER then
       error("Sélectionnez une piste séquenceur (pas Master/Send).")
     end
-    seqtrk.visible_effect_columns =
-      math.max(1, seqtrk.visible_effect_columns)
-    seqtrk.volume_column_visible = true
-    seqtrk.delay_column_visible  = true
+    -- Une colonne d'effet DÉDIÉE par effet (indépendantes, toutes
+    -- visibles) : col 1 = slide (0G), col 2 = ratchet (0R). Le
+    -- microtiming va dans la colonne delay native de la note.
+    seqtrk.visible_effect_columns = math.max(2, seqtrk.visible_effect_columns)
+    seqtrk.volume_column_visible  = true
+    seqtrk.delay_column_visible   = true
     for i = 1, length do
       local s    = steps[i]
       local line = track:line(i)
       local nc   = line:note_column(1)
-      local ec   = line:effect_column(1)
-      nc:clear(); ec:clear()
+      local ec_slide = line:effect_column(1)
+      local ec_ratch = line:effect_column(2)
+      nc:clear(); ec_slide:clear(); ec_ratch:clear()
       if s.semi == 0 then
         nc.note_string = "OFF"
       else
@@ -1487,9 +1514,10 @@ local function lp_export_to_track(steps, length)
           nc.delay_value = math.floor((frac % 1) * 255 + 0.5) % 256
         end
         if s.slide then
-          ec.number_string = "0G"; ec.amount_value = 0x0F  -- glide
-        elseif (s.ratchet or 1) > 1 then
-          ec.number_string = "0R"; ec.amount_value = s.ratchet  -- retrig
+          ec_slide.number_string = "0G"; ec_slide.amount_value = 0x0F
+        end
+        if (s.ratchet or 1) > 1 then
+          ec_ratch.number_string = "0R"; ec_ratch.amount_value = s.ratchet
         end
       end
     end
@@ -1509,7 +1537,11 @@ local function show_live_dialog()
   local vb    = renoise.ViewBuilder()
   local state = { steps = live_steps_from_string(PREFS.live_pattern_state.value),
                   length = PREFS.live_length.value, sel = 1 }
-  local cells = { oct = {}, pitch = {}, accent = {}, slide = {}, fx = {} }
+  -- fxr/fxc/fxd/fxg : une lane visible par effet (Ratchet/Cutoff/Delay/
+  -- Gate). La valeur précise s'édite dans l'inspecteur ; la lane montre
+  -- d'un coup d'œil quels pas portent l'effet + le pas sélectionné.
+  local cells = { oct = {}, pitch = {}, accent = {}, slide = {},
+                  fxr = {}, fxc = {}, fxd = {}, fxg = {} }
   local status_view
   local fx_boxes = {}
 
@@ -1530,10 +1562,15 @@ local function show_live_dialog()
     for p = 1, 12 do paint(cells.pitch[p][i], s.semi == p and COLOR_ON or off) end
     paint(cells.accent[i], s.accent and COLOR_ON or off)
     paint(cells.slide[i],  s.slide  and COLOR_ON or off)
-    local fxc = off
-    if step_has_fx(s) then fxc = COLOR_FX end
-    if i == state.sel then fxc = COLOR_SEL end
-    paint(cells.fx[i], fxc)
+    local function lane(nondefault)
+      if i == state.sel then return COLOR_SEL end
+      if nondefault then return COLOR_FX end
+      return off
+    end
+    paint(cells.fxr[i], lane(s.ratchet ~= FX_DEFAULT.ratchet))
+    paint(cells.fxc[i], lane(s.cutoff  ~= FX_DEFAULT.cutoff))
+    paint(cells.fxd[i], lane(s.delay   ~= FX_DEFAULT.delay))
+    paint(cells.fxg[i], lane(s.gate    ~= FX_DEFAULT.gate))
   end
 
   local function repaint_all()
@@ -1632,8 +1669,12 @@ local function show_live_dialog()
     function(s) return function() toggle_slide(s) end end)
   local accent_row = note_row("ACCENT", cells.accent,
     function(s) return function() toggle_accent(s) end end)
-  local fx_row     = note_row("FX·sel", cells.fx,
-    function(s) return function() select_step(s) end end)
+  -- Lanes FX : clic = sélectionne le pas (valeur éditée dans l'inspecteur).
+  local function fx_factory(s) return function() select_step(s) end end
+  local fxr_row = note_row("RATCHET", cells.fxr, fx_factory)
+  local fxc_row = note_row("CUTOFF",  cells.fxc, fx_factory)
+  local fxd_row = note_row("DELAY",   cells.fxd, fx_factory)
+  local fxg_row = note_row("GATE",    cells.fxg, fx_factory)
 
   -- Toolbars -----------------------------------------------------------------
   local midi_outs = renoise.Midi.available_output_devices()
@@ -1770,7 +1811,10 @@ local function show_live_dialog()
   table.insert(items, slide_row)
   table.insert(items, accent_row)
   table.insert(items, vb:space { height = 4 })
-  table.insert(items, fx_row)
+  table.insert(items, fxr_row)
+  table.insert(items, fxc_row)
+  table.insert(items, fxd_row)
+  table.insert(items, fxg_row)
   table.insert(items, vb:space { height = 6 })
   table.insert(items, status_view)
 
@@ -1781,6 +1825,7 @@ local function show_live_dialog()
   if _live_dialog and _live_dialog.visible then _live_dialog:close() end
   _live_dialog = renoise.app():show_custom_dialog(
     "TD-3 MIDI-live (32 pas + FX)", vb:column(cdef))
+  watch_dialog_close(function() return _live_dialog end, lp_stop)
 end
 
 -- Menu / keybinding registration -------------------------------------------
