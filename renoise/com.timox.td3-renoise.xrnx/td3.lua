@@ -244,4 +244,164 @@ function M.format_pattern_label(num)
   return tostring((num % 8) + 1) .. half
 end
 
+-- ---------------------------------------------------------------------------
+-- .seq container (single-pattern Synthtribe export) — Lua port of sqs.read_seq
+--   magic 23 98 54 76, UTF-16BE product, UTF-16BE version,
+--   uint32 size (=112), 112-byte data block. Slot lives in the filename only.
+-- ---------------------------------------------------------------------------
+
+M.SEQ_MAGIC = {0x23, 0x98, 0x54, 0x76}
+
+local function rd_u32(bytes, off)            -- off is 1-based
+  return (bytes[off] or 0) * 16777216 + (bytes[off + 1] or 0) * 65536
+       + (bytes[off + 2] or 0) * 256 + (bytes[off + 3] or 0)
+end
+
+local function wr_u32(out, v)
+  out[#out + 1] = math.floor(v / 16777216) % 256
+  out[#out + 1] = math.floor(v / 65536) % 256
+  out[#out + 1] = math.floor(v / 256) % 256
+  out[#out + 1] = v % 256
+end
+
+local function wr_utf16be_string(out, s)
+  local enc = {}
+  for i = 1, #s do enc[#enc + 1] = 0; enc[#enc + 1] = s:byte(i) end
+  wr_u32(out, #enc)
+  for _, x in ipairs(enc) do out[#out + 1] = x end
+end
+
+--- Decode a .seq byte array → 112-byte data block (or nil, err).
+function M.read_seq(bytes)
+  if #bytes < 8 then return nil, "fichier trop court" end
+  for i, v in ipairs(M.SEQ_MAGIC) do
+    if bytes[i] ~= v then return nil, "magic .seq invalide" end
+  end
+  local off = 5
+  for _ = 1, 2 do                            -- skip product + version strings
+    local n = rd_u32(bytes, off)
+    off = off + 4 + n
+  end
+  local size = rd_u32(bytes, off)
+  off = off + 4
+  if size ~= M.DATA_SIZE then
+    return nil, "taille de bloc inattendue (" .. size .. ")"
+  end
+  local data = {}
+  for i = 1, M.DATA_SIZE do data[i] = bytes[off + i - 1] end
+  if data[M.DATA_SIZE] == nil then return nil, "données .seq tronquées" end
+  return data
+end
+
+--- Encode a 112-byte data block into a .seq byte array.
+function M.write_seq(data, product, version)
+  product = product or "TD-3-MO"
+  version = version or "2.0.1"
+  local out = {}
+  for _, v in ipairs(M.SEQ_MAGIC) do out[#out + 1] = v end
+  wr_utf16be_string(out, product)
+  wr_utf16be_string(out, version)
+  wr_u32(out, M.DATA_SIZE)
+  for i = 1, M.DATA_SIZE do out[#out + 1] = data[i] end
+  return out
+end
+
+-- ---------------------------------------------------------------------------
+-- YAML pattern format (the `td3` CLI's human format) — minimal line parser.
+-- Only the keys this tool needs are read; a general YAML parser is overkill.
+--   group: I   pattern: 1A   triplet: true   step_count: 15
+--   seq:
+--   - C#2 accent slide        (flags libres : accent slide tie rest)
+--   - -                       (rest sans pitch)
+-- ---------------------------------------------------------------------------
+
+local NOTE_TO_SEMI = {
+  C = 1, ["C#"] = 2, D = 3, ["D#"] = 4, E = 5, F = 6,
+  ["F#"] = 7, G = 8, ["G#"] = 9, A = 10, ["A#"] = 11, B = 12,
+}
+
+--- Parse the td3 YAML text → decoded-shaped table (same shape as decode_data),
+-- directly consumable by the editor's apply_decoded_to_steps.
+function M.parse_yaml_pattern(text)
+  local triplet, in_seq, seq = false, false, {}
+  for line in (text .. "\n"):gmatch("(.-)\n") do
+    local s = line:gsub("\r", ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if s ~= "" and s:sub(1, 1) ~= "#" then
+      if in_seq and s:sub(1, 1) == "-" then
+        seq[#seq + 1] = s:sub(2):gsub("^%s+", "")
+      else
+        in_seq = false
+        local key, val = s:match("^([%w_]+)%s*:%s*(.*)$")
+        if key == "triplet" then
+          triplet = (val == "true")
+        elseif key == "seq" then
+          in_seq = true
+        end
+      end
+    end
+  end
+
+  local pitches, accent, slide, rest_mask = {}, {}, {}, {}
+  for i = 1, M.STEPS do
+    pitches[i] = M.DEFAULT_PITCH; accent[i] = 0; slide[i] = 0
+    rest_mask[i] = true
+  end
+
+  for i = 1, math.min(#seq, M.STEPS) do
+    local toks = {}
+    for w in seq[i]:gmatch("%S+") do toks[#toks + 1] = w end
+    local first = toks[1]
+    local rest, acc, sld = false, false, false
+    local storage, idx = M.DEFAULT_PITCH, 1
+    if first and first ~= "-" then
+      local nm, oc = first:match("^([A-G]#?)(-?%d+)$")
+      local semi = nm and NOTE_TO_SEMI[nm]
+      if semi then
+        storage = M.midi_to_storage((tonumber(oc) + 1) * 12 + (semi - 1))
+        idx = 2
+      end
+    elseif first == "-" then
+      rest, idx = true, 2
+    else
+      rest = true                            -- empty item → rest
+    end
+    for k = idx, #toks do
+      local f = toks[k]
+      if f == "accent" then acc = true
+      elseif f == "slide" then sld = true
+      elseif f == "rest" then rest = true end
+      -- "tie" : ignoré (la grille n'a pas de notion de tie, cf. Read TD-3)
+    end
+    pitches[i]   = storage
+    accent[i]    = acc and 1 or 0
+    slide[i]     = sld and 1 or 0
+    rest_mask[i] = rest
+  end
+
+  return {
+    pitches = pitches, accent = accent, slide = slide,
+    rest_mask = rest_mask, triplet = triplet,
+    step_count = #seq, hold_mask = {},
+  }
+end
+
+--- Serialise a decoded pattern back to td3 YAML text.
+function M.pattern_to_yaml(group, pat, d)
+  local lines = {
+    "group: " .. (M.GROUP_LABELS[group + 1] or "I"),
+    "pattern: " .. M.format_pattern_label(pat),
+    "triplet: " .. (d.triplet and "true" or "false"),
+    "step_count: " .. tostring(d.step_count or M.STEPS),
+    "seq:",
+  }
+  for i = 1, M.STEPS do
+    local toks = { M.midi_to_name(M.storage_to_midi(d.pitches[i])) }
+    if d.rest_mask[i] then toks[#toks + 1] = "rest" end
+    if (d.accent[i] or 0) ~= 0 then toks[#toks + 1] = "accent" end
+    if (d.slide[i]  or 0) ~= 0 then toks[#toks + 1] = "slide"  end
+    lines[#lines + 1] = "- " .. table.concat(toks, " ")
+  end
+  return table.concat(lines, "\n") .. "\n"
+end
+
 return M
