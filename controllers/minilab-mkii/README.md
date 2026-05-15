@@ -73,21 +73,21 @@ flowchart TB
     E7["7 - CC27<br/>Vol Track 7"]
     E8["8 - CC28<br/>Vol Track 8"]
   end
-  subgraph PADS["Pads - Ch10, notes 36-43 (Trigger)"]
+  subgraph PADS["Pads banque 1 - Navigation"]
     direction TB
     subgraph PR1["Rangee haute"]
       direction LR
-      P1["Pad 1 - n36<br/>&#9664; Pattern"]
-      P2["Pad 2 - n37<br/>Pattern &#9654;"]
-      P3["Pad 3 - n38<br/>&#9664; Track"]
-      P4["Pad 4 - n39<br/>Track &#9654;"]
+      P1["Pad1 CC52 Ch2<br/>&#9664; Pattern"]
+      P2["Pad2 n37 Ch10<br/>Pattern &#9654;"]
+      P3["Pad3 n38 Ch10<br/>&#9664; Track"]
+      P4["Pad4 n39 Ch10<br/>Track &#9654;"]
     end
     subgraph PR2["Rangee basse"]
       direction LR
-      P5["Pad 5 - n40<br/>&#9664; DSP"]
-      P6["Pad 6 - n41<br/>DSP &#9654;"]
-      P7["Pad 7 - n42<br/>Vue Pattern"]
-      P8["Pad 8 - n43<br/>Vue MIDI"]
+      P5["Pad5 n40 Ch10<br/>&#9664; DSP"]
+      P6["Pad6 n41 Ch10<br/>DSP &#9654;"]
+      P7["Pad7 n42 Ch10<br/>Vue Pattern"]
+      P8["Pad8 n43 Ch10<br/>Vue MIDI"]
     end
   end
   ENC ~~~ PADS
@@ -108,18 +108,33 @@ flowchart TB
 | 7 | 27 | Volume Track 7 |
 | 8 | 28 | Volume Track 8 |
 
-### Pads — MIDI canal 10, Note (Trigger)
+### Pads banque 1 — Navigation (valeurs capturées sur le MiniLab)
 
-| Pad | Note | Fonction Renoise | Action interne |
-|---|---|---|---|
-| 1 | 36 | ◀ Pattern précédent | `Navigation:Sequencer:Select Previous Sequence Pos` |
-| 2 | 37 | Pattern suivant ▶ | `Navigation:Sequencer:Select Next Sequence Pos` |
-| 3 | 38 | ◀ Track précédente | `Navigation:Tracks:Select Previous Track` |
-| 4 | 39 | Track suivante ▶ | `Navigation:Tracks:Select Next Track` |
-| 5 | 40 | ◀ DSP précédent | `Navigation:Track DSPs:Select Previous Track DSP` |
-| 6 | 41 | DSP suivant ▶ | `Navigation:Track DSPs:Select Next Track DSP` |
-| 7 | 42 | Vue éditeur de pattern | `GUI:Middle Frame:Show Pattern Editor` |
-| 8 | 43 | Vue éditeur MIDI | `GUI:Middle Frame:Show Instrument Midi Editor` |
+| Pad | Envoie | Fonction Renoise |
+|---|---|---|
+| 1 | CC 52 · Ch2 | ◀ Pattern précédent (`Navigation:Sequencer:Select Previous Sequence Pos`) |
+| 2 | Note 37 · Ch10 | Pattern suivant ▶ (`…Select Next Sequence Pos`) |
+| 3 | Note 38 · Ch10 | ◀ Track précédente (`Navigation:Tracks:Select Previous Track`) |
+| 4 | Note 39 · Ch10 | Track suivante ▶ (`…Select Next Track`) |
+| 5 | Note 40 · Ch10 | ◀ DSP précédent (`Navigation:Track DSPs:Select Previous Track DSP`) |
+| 6 | Note 41 · Ch10 | DSP suivant ▶ (`…Select Next Track DSP`) |
+| 7 | Note 42 · Ch10 | Vue éditeur de pattern (`GUI:Middle Frame:Show Pattern Editor`) |
+| 8 | Note 43 · Ch10 | Vue éditeur MIDI (`GUI:Middle Frame:Show Instrument Midi Editor`) |
+
+> Pad 1 envoie du CC (et non une note) sur ce preset — sans importance,
+> Renoise le mappe pareil. Les valeurs ci-dessus sont **celles réellement
+> émises par ton MiniLab**, capturées par `build_xrnm.py` (zéro saisie
+> manuelle, fichier revalidé : 0 collision).
+
+### Pads banque 2 (Mute) — NON inclus
+
+Sur ce preset, les pads 9-16 envoient les **mêmes CC que les knobs de
+volume** (CC 23-28, Ch2) → conflit irrésolvable côté Renoise. Ils sont
+donc **volontairement exclus** du fichier. Pour les ajouter (Mute/Solo,
+transport…), il faut d'abord leur donner des numéros distincts **dans
+MIDI Control Center** : sélectionne les pads de la banque 9-16, mets-les
+en **Note, Channel 10, notes 44-51, mode Gate**, *Store To*, puis
+relance `build_xrnm.py`.
 
 ## Notes importantes
 
@@ -127,9 +142,8 @@ flowchart TB
   `1` s'affiche **Ch2** dans Renoise, `9` s'affiche **Ch10**. Les
   encodeurs sont sur le canal 2, les pads sur le canal 10 (valeurs
   relevées sur tes propres captures, donc cohérentes avec ton MiniLab).
-- **Si un pad ne réagit pas** : sa note réelle (preset MCC) diffère de
-  36-43. En *Learn Mode* dans la fenêtre MIDI Mapping, tape le pad : le
-  numéro reçu s'affiche → corrige le `<CCNumberOrNote>` correspondant.
+- **Si un pad ne réagit pas** : relance `build_xrnm.py` (il recapture
+  les valeurs réelles et revalide) plutôt que d'éditer à la main.
 - **« Pattern précédent/suivant »** = avancer/reculer dans la **séquence
   du morceau** (l'arrangement). Pour changer *quel* pattern occupe le
   slot courant, ce sont d'autres actions
@@ -142,8 +156,9 @@ flowchart TB
 - 2ᵉ banque d'encodeurs → volume tracks 9-16, ou paramètres du **DSP
   sélectionné** (clic droit sur un paramètre d'effet → *Set MIDI
   Mapping* → tourne le knob).
-- 2ᵉ banque de pads → Mute/Solo des tracks, transport (Play/Stop),
-  Loop, etc.
-
-Donne les numéros CC/notes de ta 2ᵉ banque (preset MCC) et on étend le
-fichier.
+- 2ᵉ banque de pads → Mute/Solo, transport, Loop : possible une fois
+  les pads 9-16 réassignés dans MCC (voir « Pads banque 2 » ci-dessus),
+  puis `build_xrnm.py`.
+- Paramètres du **DSP sélectionné** au knob : nécessite les libellés
+  d'action de `Navigation ▸ Track DSPs` (capture d'écran du nœud déplié
+  dans la fenêtre MIDI Mapping Renoise).

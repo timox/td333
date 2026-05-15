@@ -1,9 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <MidiActionMappingSet doc_version="0">
   <ActionMappings>
-
-    <!-- ===== 8 ENCODEURS (Controllers, Channel 1 = Ch2 affiché, CC 21..28) =====
-         Volume tracks #01..#08 — VALIDÉ.                                     -->
+    <!-- 8 ENCODEURS — Volume tracks 1-8 (Ch2, CC 21-28) -->
     <ActionMapping>
       <Action>Track Levels:Volume:Track XX (Pre):Track #01 [Set]</Action>
       <MidiMappings><MidiMapping>
@@ -68,21 +66,15 @@
         <Min>0.0</Min><Max>1.0</Max>
       </MidiMapping></MidiMappings>
     </ActionMapping>
-
-    <!-- ===== 8 PADS (Notes, Channel 9 = Ch10 affiché, notes 36..43) =====
-         Navigation. 1 note distincte par pad. Si un pad ne réagit pas,
-         sa note réelle (MCC) diffère : dis-moi lequel, je recale.       -->
-
-    <!-- Pad 36 : PATTERN précédent (recule dans le morceau) -->
+    <!-- 8 PADS banque 1 — Navigation (valeurs capturées sur ton MiniLab) -->
     <ActionMapping>
       <Action>Navigation:Sequencer:Select Previous Sequence Pos [Trigger]</Action>
       <MidiMappings><MidiMapping>
-        <MappingMode>Notes</MappingMode><ControllerMode>Relative two's comp</ControllerMode>
-        <NoteMode>Trigger</NoteMode><Channel>9</Channel><CCNumberOrNote>36</CCNumberOrNote>
+        <MappingMode>Controllers</MappingMode><ControllerMode>Absolute 7 bit</ControllerMode>
+        <NoteMode>Value</NoteMode><Channel>1</Channel><CCNumberOrNote>52</CCNumberOrNote>
         <Min>0.0</Min><Max>1.0</Max>
       </MidiMapping></MidiMappings>
     </ActionMapping>
-    <!-- Pad 37 : PATTERN suivant (avance dans le morceau) -->
     <ActionMapping>
       <Action>Navigation:Sequencer:Select Next Sequence Pos [Trigger]</Action>
       <MidiMappings><MidiMapping>
@@ -91,7 +83,6 @@
         <Min>0.0</Min><Max>1.0</Max>
       </MidiMapping></MidiMappings>
     </ActionMapping>
-    <!-- Pad 38 : TRACK précédente -->
     <ActionMapping>
       <Action>Navigation:Tracks:Select Previous Track [Trigger]</Action>
       <MidiMappings><MidiMapping>
@@ -100,7 +91,6 @@
         <Min>0.0</Min><Max>1.0</Max>
       </MidiMapping></MidiMappings>
     </ActionMapping>
-    <!-- Pad 39 : TRACK suivante -->
     <ActionMapping>
       <Action>Navigation:Tracks:Select Next Track [Trigger]</Action>
       <MidiMappings><MidiMapping>
@@ -109,7 +99,6 @@
         <Min>0.0</Min><Max>1.0</Max>
       </MidiMapping></MidiMappings>
     </ActionMapping>
-    <!-- Pad 40 : DSP précédent -->
     <ActionMapping>
       <Action>Navigation:Track DSPs:Select Previous Track DSP [Trigger]</Action>
       <MidiMappings><MidiMapping>
@@ -118,7 +107,6 @@
         <Min>0.0</Min><Max>1.0</Max>
       </MidiMapping></MidiMappings>
     </ActionMapping>
-    <!-- Pad 41 : DSP suivant -->
     <ActionMapping>
       <Action>Navigation:Track DSPs:Select Next Track DSP [Trigger]</Action>
       <MidiMappings><MidiMapping>
@@ -127,7 +115,6 @@
         <Min>0.0</Min><Max>1.0</Max>
       </MidiMapping></MidiMappings>
     </ActionMapping>
-    <!-- Pad 42 : focus éditeur de pattern -->
     <ActionMapping>
       <Action>GUI:Middle Frame:Show Pattern Editor [Trigger]</Action>
       <MidiMappings><MidiMapping>
@@ -136,7 +123,6 @@
         <Min>0.0</Min><Max>1.0</Max>
       </MidiMapping></MidiMappings>
     </ActionMapping>
-    <!-- Pad 43 : focus éditeur MIDI instrument -->
     <ActionMapping>
       <Action>GUI:Middle Frame:Show Instrument Midi Editor [Trigger]</Action>
       <MidiMappings><MidiMapping>
@@ -145,6 +131,5 @@
         <Min>0.0</Min><Max>1.0</Max>
       </MidiMapping></MidiMappings>
     </ActionMapping>
-
   </ActionMappings>
 </MidiActionMappingSet>
