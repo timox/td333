@@ -1,0 +1,22 @@
+# Long slide riser — montée legato continue C1 → C4, transition/build-up
+group: I
+pattern: 8A
+triplet: false
+step_count: 16
+seq:
+  - "C1 accent"
+  - "D#1 slide"
+  - "G1 slide"
+  - "C2 slide"
+  - "D#2 slide"
+  - "G2 slide"
+  - "C3 slide"
+  - "D#3 slide"
+  - "G3 slide"
+  - "C4 slide"
+  - "G3 slide"
+  - "D#3 slide"
+  - "C3 slide"
+  - "G2 slide"
+  - "C2 slide"
+  - "C1 accent"

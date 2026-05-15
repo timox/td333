@@ -1,0 +1,23 @@
+# Triplet swing — pattern ternaire (12 steps utiles, triplet=true)
+# Les steps 13-16 sont ignorés par le firmware en mode triplet.
+group: I
+pattern: 6A
+triplet: true
+step_count: 12
+seq:
+  - "C2 accent"
+  - "D#2"
+  - "G2 slide"
+  - "C2 accent"
+  - "D#2"
+  - "F2 slide"
+  - "C2 accent"
+  - "D#2"
+  - "A#2 slide"
+  - "G2 accent"
+  - "F2"
+  - "D#2 slide"
+  - "-"
+  - "-"
+  - "-"
+  - "-"

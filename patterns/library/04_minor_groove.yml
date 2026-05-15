@@ -1,0 +1,22 @@
+# Minor groove — gamme mineure naturelle de C, rests pour le swing
+group: I
+pattern: 4A
+triplet: false
+step_count: 16
+seq:
+  - "C2 accent"
+  - "-"
+  - "D#2 slide"
+  - "F2"
+  - "-"
+  - "G2 accent slide"
+  - "F2"
+  - "-"
+  - "D#2"
+  - "C2 accent"
+  - "-"
+  - "A#1 slide"
+  - "C2"
+  - "-"
+  - "G1 accent"
+  - "-"

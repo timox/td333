@@ -1,0 +1,23 @@
+# Acid classique — riff montant à la quinte, slides typés 303
+# Walking bass C → G avec slides et accents sur les temps forts.
+group: I
+pattern: 1A
+triplet: false
+step_count: 16
+seq:
+  - "C2 accent"
+  - "C3 slide"
+  - "C2"
+  - "D#2 slide"
+  - "C2 accent"
+  - "G2 slide"
+  - "C2"
+  - "A#2 slide"
+  - "C2 accent"
+  - "C3 slide"
+  - "C2"
+  - "D#2 slide"
+  - "C2 accent"
+  - "G2"
+  - "A#2 slide"
+  - "C2"
