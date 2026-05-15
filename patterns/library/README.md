@@ -29,6 +29,10 @@ les 8 d'un coup dans le groupe I.
 Ensuite sur la TD-3 : MODE = PATTERN PLAY, GROUP = I, PATTERN A,
 Selector 1-8, START.
 
+Côté **tool Renoise**, on peut aussi pointer le dossier *Bibliothèque*
+sur `patterns/library/` : ces `.yml` apparaissent directement dans le
+popup et se chargent dans la grille (format auto-détecté).
+
 ## Convention
 
 - Notes en MIDI standard (C4 = MIDI 60). Plage TD-3 = **C1..C4**.
