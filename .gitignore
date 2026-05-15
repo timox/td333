@@ -5,6 +5,7 @@ build/
 dist/
 .venv/
 .pytest_cache/
-patterns/
+/patterns/*
+!/patterns/library/
 *.syx
 !td3dump.sqs

@@ -1,0 +1,22 @@
+# Staccato pluck — notes courtes espacées de rests, zéro slide, sec
+group: I
+pattern: 7A
+triplet: false
+step_count: 16
+seq:
+  - "C2 accent"
+  - "-"
+  - "-"
+  - "G2"
+  - "-"
+  - "C2 accent"
+  - "-"
+  - "D#2"
+  - "-"
+  - "C2 accent"
+  - "-"
+  - "-"
+  - "A#1"
+  - "-"
+  - "G1 accent"
+  - "-"

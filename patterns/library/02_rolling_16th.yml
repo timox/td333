@@ -1,0 +1,23 @@
+# Rolling 16th — basse roulante sur une note, accents syncopés
+# La même note martelée avec accents décalés = groove hypnotique.
+group: I
+pattern: 2A
+triplet: false
+step_count: 16
+seq:
+  - "A1 accent"
+  - "A1"
+  - "A1"
+  - "A1 accent"
+  - "A1"
+  - "A1 accent"
+  - "A1"
+  - "A1"
+  - "A1 accent"
+  - "A1"
+  - "A1"
+  - "A1 accent"
+  - "A1"
+  - "A1 accent"
+  - "A1"
+  - "A1"
