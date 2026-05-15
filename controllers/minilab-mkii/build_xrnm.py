@@ -82,8 +82,10 @@ def _drain(inp):
 
 
 def _wait_pad(inp, timeout=20.0):
-    """Bloque jusqu'au prochain NOTE ON (vel>0). Ignore CC/clock/sysex/
-    aftertouch. Renvoie (channel0, note) ou None si timeout."""
+    """Attend l'appui d'un pad : NOTE ON (vel>0) OU CC (value>0) — selon
+    que le pad est configuré en Note ou en CC dans MCC. Ignore les
+    relâchements (note_off / CC value 0), clock, sysex, aftertouch.
+    Renvoie ('note'|'cc', channel0, numéro) ou None si timeout."""
     t0 = time.time()
     while time.time() - t0 < timeout:
         msg = inp.poll()
@@ -91,8 +93,9 @@ def _wait_pad(inp, timeout=20.0):
             time.sleep(0.005)
             continue
         if msg.type == "note_on" and msg.velocity > 0:
-            return (msg.channel, msg.note)
-        # tout le reste (CC des knobs inclus) est ignoré volontairement
+            return ("note", msg.channel, msg.note)
+        if msg.type == "control_change" and msg.value > 0:
+            return ("cc", msg.channel, msg.control)
     return None
 
 
@@ -119,15 +122,17 @@ def build(port_fragment: str, out_path: str) -> None:
             if cap is None:
                 print("   rien reçu — on refait.\n")
                 continue
-            ch0, note = cap
-            msg = f"   reçu : NOTE {note} (canal {ch0 + 1})"
-            if (ch0, note) in used:
-                msg += f"  ⚠ déjà = « {used[(ch0, note)]} »"
+            kind, ch0, num = cap
+            key = (kind, ch0, num)
+            lbl = "NOTE" if kind == "note" else "CC"
+            msg = f"   reçu : {lbl} {num} (canal {ch0 + 1})"
+            if key in used:
+                msg += f"  ⚠ déjà = « {used[key]} »"
             print(msg)
             if _ask("   Entrée=OK  |  r=refais : ") == "r":
                 print(); continue
-            used[(ch0, note)] = label
-            captured.append((action, note_mode, ch0, note))
+            used[key] = label
+            captured.append((action, kind, note_mode, ch0, num))
             i += 1
             print()
 
@@ -157,8 +162,11 @@ def _write(path, pads):
          '<MidiActionMappingSet doc_version="0">', '  <ActionMappings>']
     for action, ch0, cc in ENCODERS:
         _emit(L, action, "Controllers", "Absolute 7 bit", "Trigger", ch0, cc)
-    for action, note_mode, ch0, note in pads:
-        _emit(L, action, "Notes", "Relative two's comp", note_mode, ch0, note)
+    for action, kind, note_mode, ch0, num in pads:
+        if kind == "note":
+            _emit(L, action, "Notes", "Relative two's comp", note_mode, ch0, num)
+        else:  # pad configuré en CC (toggle) côté MCC
+            _emit(L, action, "Controllers", "Absolute 7 bit", "Value", ch0, num)
     L += ['  </ActionMappings>', '</MidiActionMappingSet>', '']
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(L))
