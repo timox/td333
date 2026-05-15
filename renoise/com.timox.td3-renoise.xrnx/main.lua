@@ -429,6 +429,14 @@ end
 -- Preview audio --------------------------------------------------------------
 
 local _preview_timer, _preview_state = nil, nil
+local _transport_handler = nil
+
+-- Forward declarations : Renoise tool strict mode interdit l'accès aux
+-- variables non déclarées, et preview_stop appelle unwatch_renoise_transport
+-- qui est défini plus bas.
+local inhibit_td3_sequencer
+local watch_renoise_transport
+local unwatch_renoise_transport
 
 local function all_notes_off(out)
   -- Belt and suspenders : Note OFF for every possible pitch, then CC 123
@@ -461,13 +469,12 @@ end
 -- ne connais pas" + nos notes. On neutralise en envoyant MIDI Stop (FC)
 -- au démarrage du Preview, puis on hooke transport.playing : si
 -- l'utilisateur relance Renoise pendant la prise, on re-Stop la TD-3.
-local _transport_handler = nil
 
-local function inhibit_td3_sequencer(out)
+function inhibit_td3_sequencer(out)
   if out then out:send { 0xFC } end  -- MIDI Real-Time Stop
 end
 
-local function watch_renoise_transport(out)
+function watch_renoise_transport(out)
   if _transport_handler then return end
   local song = renoise.song()
   _transport_handler = function()
@@ -478,7 +485,7 @@ local function watch_renoise_transport(out)
   song.transport.playing_observable:add_notifier(_transport_handler)
 end
 
-local function unwatch_renoise_transport()
+function unwatch_renoise_transport()
   if not _transport_handler then return end
   local song = renoise.song()
   if song.transport.playing_observable:has_notifier(_transport_handler) then

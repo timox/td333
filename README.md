@@ -80,8 +80,9 @@ Round-trip byte-exact garanti sur les 64 patterns du dump usine
 
 ### Installation
 
-Renoise ≥ 3.5 (API ≥ 6.2 requise pour le ⏺ Bounce qui pilote le Sample
-Recorder).
+**Pré-requis** : **Renoise ≥ 3.5.4** (= API scripting **6.2** ; nécessaire
+pour piloter le Sample Recorder via `start_sample_recording`). Les versions
+plus anciennes ne supportent pas le bouton **⏺ Bounce**.
 
 ```bash
 cd renoise
