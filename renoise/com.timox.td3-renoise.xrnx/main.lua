@@ -18,7 +18,21 @@ clamped to [0x0C, 0x30].
 local td3 = require "td3"
 
 local PITCH_NAMES = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"}
-local STEPS       = 16
+
+-- Le hardware TD-3 est figé à 16 pas, sans FX par pas : tout le chemin
+-- SysEx / .syx / .seq / .yml reste donc sur HW_STEPS = 16, inchangé.
+-- Le mode "MIDI-live" (TD-3 = module de son) n'a pas ces limites : la
+-- grille peut aller jusqu'à MAX_STEPS = 32 et porter des FX par pas
+-- (ratchet, cutoff CC74, microtiming, gate). Ces FX et les pas > 16 ne
+-- sont JAMAIS écrits en mémoire TD-3 — ils ne vivent qu'en preview /
+-- export piste Renoise.
+local HW_STEPS    = 16
+local MAX_STEPS   = 32
+local STEPS       = HW_STEPS  -- alias historique (chemin hardware uniquement)
+
+-- Valeurs FX neutres : un pattern 16 pas sans FX rejoue exactement comme
+-- avant (ratchet 1, pas de CC cutoff, pas de décalage, note tenue).
+local FX_DEFAULT  = { ratchet = 1, cutoff = -1, delay = 0, gate = 100 }
 
 -- Visual constants -----------------------------------------------------------
 local CELL_W      = 22
@@ -48,6 +62,18 @@ local PREFS = renoise.Document.create("Td3RenoisePrefs") {
   --   "o:s:a:l" per step, joined by ";". o ∈ 0..4 (0=rest), s ∈ 0..12 (1..12
   --   for C..B), a/l ∈ 0/1.
   pattern_state        = "",
+
+  -- Mode MIDI-live (dialogue séparé) : état indépendant. Record étendu
+  -- "o:s:a:l:r:c:d:g" (ratchet, cutoff CC74 ou -1, delay ms, gate %),
+  -- MAX_STEPS pas, jamais écrit en mémoire TD-3.
+  live_pattern_state   = "",
+  live_length          = 16,   -- 16 ou 32
+  live_step_rate_index = 3,
+  live_loop            = true,
+  live_sync_bpm        = true,
+  live_step_ms         = 125,
+  live_normal_velocity = 80,
+  live_accent_velocity = 110,
 }
 renoise.tool().preferences = PREFS
 
@@ -1226,11 +1252,554 @@ local function show_dialog()
   _dialog = renoise.app():show_custom_dialog("TD-3 Pattern Editor", content)
 end
 
+-- ===========================================================================
+-- MIDI-live : éditeur séparé. La TD-3 n'est qu'un module de son ; aucune
+-- écriture mémoire SysEx. Jusqu'à MAX_STEPS pas + FX par pas. Renoise
+-- n'ayant pas d'onglets natifs, c'est un dialogue distinct (UI dédiée,
+-- zéro risque de régression sur l'éditeur Hardware).
+-- ===========================================================================
+
+local COLOR_SEL = {0x30, 0x60, 0x90}   -- bleu : pas sélectionné (FX)
+local COLOR_FX  = {0x40, 0x70, 0x40}   -- vert : pas porteur de FX
+local COLOR_DIM = {0x6E, 0x6A, 0x60}   -- pas hors longueur active
+
+local function new_live_steps()
+  local t = {}
+  for i = 1, MAX_STEPS do
+    t[i] = { oct = 0, semi = 0, accent = false, slide = false,
+             ratchet = FX_DEFAULT.ratchet, cutoff = FX_DEFAULT.cutoff,
+             delay = FX_DEFAULT.delay, gate = FX_DEFAULT.gate }
+  end
+  return t
+end
+
+local function step_has_fx(s)
+  return s.ratchet ~= FX_DEFAULT.ratchet or s.cutoff ~= FX_DEFAULT.cutoff
+      or s.delay ~= FX_DEFAULT.delay or s.gate ~= FX_DEFAULT.gate
+end
+
+local function live_steps_to_string(steps)
+  local parts = {}
+  for i = 1, MAX_STEPS do
+    local s = steps[i]
+    parts[i] = string.format("%d:%d:%d:%d:%d:%d:%d:%d",
+      s.oct, s.semi, s.accent and 1 or 0, s.slide and 1 or 0,
+      s.ratchet, s.cutoff, s.delay, s.gate)
+  end
+  return table.concat(parts, ";")
+end
+
+local function live_steps_from_string(str)
+  local steps = new_live_steps()
+  if not str or str == "" then return steps end
+  local i = 1
+  for chunk in string.gmatch(str, "[^;]+") do
+    -- Tolérant : 4 champs (ancien format hardware) ou 8 (FX). Les champs
+    -- absents reprennent les valeurs FX neutres.
+    local f = {}
+    for v in string.gmatch(chunk, "[^:]+") do f[#f + 1] = tonumber(v) end
+    if f[1] and i <= MAX_STEPS then
+      steps[i] = {
+        oct = f[1], semi = f[2] or 0,
+        accent = (f[3] or 0) == 1, slide = (f[4] or 0) == 1,
+        ratchet = f[5] or FX_DEFAULT.ratchet,
+        cutoff  = f[6] or FX_DEFAULT.cutoff,
+        delay   = f[7] or FX_DEFAULT.delay,
+        gate    = f[8] or FX_DEFAULT.gate,
+      }
+    end
+    i = i + 1
+  end
+  return steps
+end
+
+-- Fine-clock preview ---------------------------------------------------------
+-- Un seul timer haute résolution + file d'évènements datés (ms). Permet
+-- d'honorer delay (décalage intra-pas), ratchet (re-déclenchements),
+-- gate (note-off anticipé) et cutoff (CC74) uniformément, et un arrêt
+-- propre (on vide la file). Le legato/slide reprend la logique pile de
+-- notes actives de l'éditeur Hardware.
+
+local LP_TICK = 5  -- ms
+
+local _lp_timer, _lp = nil, nil
+
+local function lp_release_all()
+  if not _lp then return end
+  for _, n in ipairs(_lp.active) do
+    send_short(_lp.out, 0x80, n, 0x40)
+  end
+  _lp.active = {}
+end
+
+local function lp_stop()
+  if _lp_timer and renoise.tool():has_timer(_lp_timer) then
+    renoise.tool():remove_timer(_lp_timer)
+  end
+  _lp_timer = nil
+  if _lp then
+    lp_release_all()
+    send_short(_lp.out, 0xB0, 123, 0)
+    send_short(_lp.out, 0xB0, 120, 0)
+  end
+  _lp = nil
+end
+
+local function lp_schedule(at, fn)
+  local e = _lp.events
+  _lp.seq = _lp.seq + 1
+  e[#e + 1] = { at = at, seq = _lp.seq, fn = fn }
+end
+
+-- Programme tous les évènements MIDI du pas `idx` (1-based) débutant à
+-- l'instant absolu `start` (ms).
+local function lp_emit_step(idx, start)
+  local s = _lp.steps[idx]
+  local D = _lp.D
+  if s.semi == 0 then
+    lp_schedule(start, lp_release_all)            -- rest : gate fermé
+    return
+  end
+  if s.cutoff >= 0 then
+    local cc = s.cutoff
+    lp_schedule(start, function() send_cc(_lp.out, 0x4A, cc) end)
+  end
+  local oct  = s.oct > 0 and s.oct or 2
+  local midi = (oct + 1) * 12 + (s.semi - 1)
+  local vel  = s.accent and _lp.vel_a or _lp.vel_n
+  local base = start + (s.delay or 0)
+  local R    = s.ratchet or 1
+
+  if R <= 1 then
+    lp_schedule(base, function()
+      if s.slide and #_lp.active > 0 then
+        local last = _lp.active[#_lp.active]
+        if midi ~= last then              -- slide legato vers nouvelle pitch
+          send_short(_lp.out, 0x90, midi, vel)
+          table.insert(_lp.active, midi)
+        end                               -- même pitch → sustain (rien)
+      else
+        lp_release_all()                  -- attaque propre
+        send_short(_lp.out, 0x90, midi, vel)
+        table.insert(_lp.active, midi)
+      end
+    end)
+    if s.gate < 100 and not s.slide then  -- staccato : note-off anticipé
+      lp_schedule(base + D * s.gate / 100,
+        function() send_short(_lp.out, 0x80, midi, 0x40) end)
+    end
+  else                                    -- ratchet : re-déclenchements
+    local sub = D / R
+    lp_schedule(start, lp_release_all)
+    for k = 0, R - 1 do
+      local tk = base + k * sub
+      if k > 0 then
+        lp_schedule(tk - 2,
+          function() send_short(_lp.out, 0x80, midi, 0x40) end)
+      end
+      local final = (k == R - 1)
+      lp_schedule(tk, function()
+        send_short(_lp.out, 0x90, midi, vel)
+        if final then table.insert(_lp.active, midi) end
+      end)
+    end
+    if s.gate < 100 then
+      lp_schedule(base + (R - 1) * sub + sub * s.gate / 100,
+        function() send_short(_lp.out, 0x80, midi, 0x40) end)
+    end
+  end
+end
+
+local function lp_start(steps, length, D, vel_n, vel_a, loop, out)
+  lp_stop()
+  _lp = { steps = steps, length = length, D = D, vel_n = vel_n,
+          vel_a = vel_a, loop = loop, out = out, active = {},
+          events = {}, seq = 0, t = 0, idx = 0, next_at = 0 }
+  _lp_timer = function()
+    local st = _lp
+    if not st then return end
+    st.t = st.t + LP_TICK
+    -- Franchissement de frontière(s) de pas → on émet le pas suivant.
+    while not st.ended and st.t >= st.next_at do
+      if st.idx >= st.length then
+        if st.loop then
+          st.idx = 0
+        else
+          lp_schedule(st.next_at, function() lp_release_all() end)
+          lp_schedule(st.next_at + 1, function() lp_stop() end)
+          st.ended = true
+          break
+        end
+      end
+      lp_emit_step(st.idx + 1, st.next_at)
+      st.idx = st.idx + 1
+      st.next_at = st.next_at + st.D
+    end
+    -- Exécution des évènements échus (ordre stable at, puis seq).
+    local due, keep = {}, {}
+    for _, e in ipairs(st.events) do
+      if e.at <= st.t then due[#due + 1] = e else keep[#keep + 1] = e end
+    end
+    table.sort(due, function(a, b)
+      if a.at == b.at then return a.seq < b.seq end
+      return a.at < b.at
+    end)
+    st.events = keep
+    for _, e in ipairs(due) do e.fn() end
+  end
+  renoise.tool():add_timer(_lp_timer, LP_TICK)
+end
+
+-- Export vers une piste Renoise : écrit `length` lignes (note, volume =
+-- accent, effet glide 0Gxx pour le slide, colonne delay pour le
+-- microtiming, commande retrig pour le ratchet) dans la piste/pattern
+-- courants. Au-delà : édition native Renoise (zéro duplication).
+local function lp_export_to_track(steps, length)
+  local ok, err = pcall(function()
+    local song    = renoise.song()
+    local pattern = song:pattern(song.selected_pattern_index)
+    local track   = pattern:track(song.selected_track_index)
+    local seqtrk  = song:track(song.selected_track_index)
+    if seqtrk.type ~= renoise.Track.TRACK_TYPE_SEQUENCER then
+      error("Sélectionnez une piste séquenceur (pas Master/Send).")
+    end
+    seqtrk.visible_effect_columns =
+      math.max(1, seqtrk.visible_effect_columns)
+    seqtrk.volume_column_visible = true
+    seqtrk.delay_column_visible  = true
+    for i = 1, length do
+      local s    = steps[i]
+      local line = track:line(i)
+      local nc   = line:note_column(1)
+      local ec   = line:effect_column(1)
+      nc:clear(); ec:clear()
+      if s.semi == 0 then
+        nc.note_string = "OFF"
+      else
+        local oct  = s.oct > 0 and s.oct or 2
+        local midi = (oct + 1) * 12 + (s.semi - 1)
+        nc.note_value   = midi - 12          -- Renoise : note_value = MIDI-12
+        nc.volume_value = s.accent and 0x7F or 0x60
+        if (s.delay or 0) ~= 0 then
+          -- delay column : 0..255 sur la durée d'une ligne. On mappe
+          -- grossièrement ±60 ms → fraction de ligne (indicatif).
+          local frac = math.max(-1, math.min(1, s.delay / 60))
+          nc.delay_value = math.floor((frac % 1) * 255 + 0.5) % 256
+        end
+        if s.slide then
+          ec.number_string = "0G"; ec.amount_value = 0x0F  -- glide
+        elseif (s.ratchet or 1) > 1 then
+          ec.number_string = "0R"; ec.amount_value = s.ratchet  -- retrig
+        end
+      end
+    end
+  end)
+  if not ok then
+    renoise.app():show_warning("Export piste impossible : " .. tostring(err))
+  else
+    renoise.app():show_status(string.format(
+      "Pattern exporté sur la piste courante (%d lignes). Édition fine = Renoise natif.",
+      length))
+  end
+end
+
+local _live_dialog = nil
+
+local function show_live_dialog()
+  local vb    = renoise.ViewBuilder()
+  local state = { steps = live_steps_from_string(PREFS.live_pattern_state.value),
+                  length = PREFS.live_length.value, sel = 1 }
+  local cells = { oct = {}, pitch = {}, accent = {}, slide = {}, fx = {} }
+  local status_view
+  local fx_boxes = {}
+
+  local function persist()
+    PREFS.live_pattern_state.value = live_steps_to_string(state.steps)
+  end
+
+  local function paint(view, color) view.color = color end
+
+  local function cell_off_color(i)
+    return (i > state.length) and COLOR_DIM or COLOR_OFF
+  end
+
+  local function repaint_step(i)
+    local s = state.steps[i]
+    local off = cell_off_color(i)
+    for o = 1, 4  do paint(cells.oct[o][i],  s.oct == o  and COLOR_ON or off) end
+    for p = 1, 12 do paint(cells.pitch[p][i], s.semi == p and COLOR_ON or off) end
+    paint(cells.accent[i], s.accent and COLOR_ON or off)
+    paint(cells.slide[i],  s.slide  and COLOR_ON or off)
+    local fxc = off
+    if step_has_fx(s) then fxc = COLOR_FX end
+    if i == state.sel then fxc = COLOR_SEL end
+    paint(cells.fx[i], fxc)
+  end
+
+  local function repaint_all()
+    for i = 1, MAX_STEPS do repaint_step(i) end
+  end
+
+  local function status()
+    status_view.text = string.format(
+      "MIDI-live — %d pas — pas sélectionné %d   |   (aucune écriture mémoire TD-3)",
+      state.length, state.sel)
+  end
+
+  local function sync_fx_boxes()
+    local s = state.steps[state.sel]
+    fx_boxes.ratchet.value = s.ratchet
+    fx_boxes.cutoff.value  = s.cutoff
+    fx_boxes.delay.value   = s.delay
+    fx_boxes.gate.value    = s.gate
+    fx_boxes.pas.value     = state.sel
+  end
+
+  local function on_change() persist(); status() end
+
+  local function select_step(i)
+    state.sel = math.max(1, math.min(MAX_STEPS, i))
+    sync_fx_boxes(); repaint_all(); status()
+  end
+
+  -- Click handlers : note grid (OCT 1..4 → C1..C4 ; le pitch n'est pas
+  -- bridé hors range comme en Hardware puisqu'on ne stocke pas sur la TD-3).
+  local function toggle_oct(step, o)
+    local s = state.steps[step]
+    s.oct = (s.oct == o) and 0 or o
+    repaint_step(step); on_change()
+  end
+  local function toggle_pitch(step, p)
+    local s = state.steps[step]
+    s.semi = (s.semi == p) and 0 or p
+    repaint_step(step); on_change()
+  end
+  local function toggle_accent(step)
+    state.steps[step].accent = not state.steps[step].accent
+    repaint_step(step); on_change()
+  end
+  local function toggle_slide(step)
+    state.steps[step].slide = not state.steps[step].slide
+    repaint_step(step); on_change()
+  end
+
+  local function make_cell(fn)
+    return vb:button { width = CELL_W, height = CELL_H,
+                       color = COLOR_OFF, notifier = fn }
+  end
+  local function note_row(label, store, factory)
+    local items = { vb:text { text = label, width = LABEL_W, font = "mono" } }
+    for s = 1, MAX_STEPS do
+      local btn = make_cell(factory(s))
+      store[s] = btn
+      table.insert(items, btn)
+      if s % 4 == 0 and s < MAX_STEPS then
+        table.insert(items, vb:space { width = 4 })
+      end
+    end
+    return vb:row(items)
+  end
+
+  local oct_rows = {}
+  for o = 4, 1, -1 do
+    cells.oct[o] = {}
+    local items = { vb:text { text = "OCT " .. o, width = LABEL_W, font = "mono" } }
+    for s = 1, MAX_STEPS do
+      local cell = make_cell(function() toggle_oct(s, o) end)
+      cells.oct[o][s] = cell
+      table.insert(items, cell)
+      if s % 4 == 0 and s < MAX_STEPS then
+        table.insert(items, vb:space { width = 4 })
+      end
+    end
+    table.insert(oct_rows, vb:row(items))
+  end
+  local pitch_rows = {}
+  for p = 12, 1, -1 do
+    cells.pitch[p] = {}
+    local items = { vb:text { text = PITCH_NAMES[p], width = LABEL_W, font = "mono" } }
+    for s = 1, MAX_STEPS do
+      local cell = make_cell(function() toggle_pitch(s, p) end)
+      cells.pitch[p][s] = cell
+      table.insert(items, cell)
+      if s % 4 == 0 and s < MAX_STEPS then
+        table.insert(items, vb:space { width = 4 })
+      end
+    end
+    table.insert(pitch_rows, vb:row(items))
+  end
+  local slide_row  = note_row("SLIDE",  cells.slide,
+    function(s) return function() toggle_slide(s) end end)
+  local accent_row = note_row("ACCENT", cells.accent,
+    function(s) return function() toggle_accent(s) end end)
+  local fx_row     = note_row("FX·sel", cells.fx,
+    function(s) return function() select_step(s) end end)
+
+  -- Toolbars -----------------------------------------------------------------
+  local midi_outs = renoise.Midi.available_output_devices()
+  if #midi_outs == 0 then midi_outs = {"(no MIDI output detected)"} end
+  local function find_index(t, v)
+    for i, x in ipairs(t) do if x == v then return i end end
+    return 1
+  end
+
+  local toolbar_io = vb:row {
+    vb:text { text = "MIDI out", width = 60 },
+    vb:popup { items = midi_outs,
+               value = find_index(midi_outs, PREFS.midi_out_name.value),
+               notifier = function(v) PREFS.midi_out_name.value = midi_outs[v] end,
+               width = 180 },
+    vb:text { text = "  Ch" },
+    vb:valuebox { min = 1, max = 16, value = PREFS.midi_channel.value,
+                  notifier = function(v) PREFS.midi_channel.value = v end },
+    vb:text { text = "  Long." },
+    vb:popup { items = { "16 pas", "32 pas" },
+               value = (state.length == 32) and 2 or 1,
+               notifier = function(v)
+                 state.length = (v == 2) and 32 or 16
+                 PREFS.live_length.value = state.length
+                 if state.sel > state.length then select_step(state.length) end
+                 repaint_all(); status()
+               end,
+               width = 80 },
+    vb:text { text = "  Vel/acc" },
+    vb:valuebox { min = 1, max = 127, value = PREFS.live_normal_velocity.value,
+                  notifier = function(v) PREFS.live_normal_velocity.value = v end },
+    vb:valuebox { min = 1, max = 127, value = PREFS.live_accent_velocity.value,
+                  notifier = function(v) PREFS.live_accent_velocity.value = v end },
+  }
+
+  fx_boxes.pas = vb:valuebox { min = 1, max = MAX_STEPS, value = 1,
+    notifier = function(v) select_step(v) end }
+  fx_boxes.ratchet = vb:valuebox { min = 1, max = 8, value = 1,
+    notifier = function(v) state.steps[state.sel].ratchet = v
+      repaint_step(state.sel); on_change() end }
+  fx_boxes.cutoff = vb:valuebox { min = -1, max = 127, value = -1,
+    notifier = function(v) state.steps[state.sel].cutoff = v
+      repaint_step(state.sel); on_change() end }
+  fx_boxes.delay = vb:valuebox { min = -60, max = 60, value = 0,
+    notifier = function(v) state.steps[state.sel].delay = v
+      repaint_step(state.sel); on_change() end }
+  fx_boxes.gate = vb:valuebox { min = 5, max = 100, value = 100,
+    notifier = function(v) state.steps[state.sel].gate = v
+      repaint_step(state.sel); on_change() end }
+
+  local toolbar_fx = vb:row {
+    vb:text { text = "Pas", width = 30 }, fx_boxes.pas,
+    vb:text { text = "  Ratchet" }, fx_boxes.ratchet,
+    vb:text { text = "  Cutoff(-1=off)" }, fx_boxes.cutoff,
+    vb:text { text = "  Delay ms" }, fx_boxes.delay,
+    vb:text { text = "  Gate %" }, fx_boxes.gate,
+    vb:button { text = "→ tous les pas", width = 110,
+      tooltip = "Applique les 4 FX du pas sélectionné à tous les pas.",
+      notifier = function()
+        local src = state.steps[state.sel]
+        for i = 1, MAX_STEPS do
+          local d = state.steps[i]
+          d.ratchet, d.cutoff, d.delay, d.gate =
+            src.ratchet, src.cutoff, src.delay, src.gate
+        end
+        repaint_all(); on_change()
+      end },
+    vb:button { text = "reset pas", width = 80,
+      notifier = function()
+        local s = state.steps[state.sel]
+        s.ratchet, s.cutoff, s.delay, s.gate = FX_DEFAULT.ratchet,
+          FX_DEFAULT.cutoff, FX_DEFAULT.delay, FX_DEFAULT.gate
+        sync_fx_boxes(); repaint_step(state.sel); on_change()
+      end },
+  }
+
+  local function compute_D()
+    if PREFS.live_sync_bpm.value then
+      local rate = STEP_RATES[PREFS.live_step_rate_index.value] or STEP_RATES[3]
+      return math.floor((15000 / renoise.song().transport.bpm) / rate.mult + 0.5)
+    end
+    return PREFS.live_step_ms.value
+  end
+
+  local function go_preview()
+    local out = get_midi_out(PREFS.midi_out_name.value)
+    if not out then renoise.app():show_warning("Aucun port MIDI valide.") return end
+    lp_start(state.steps, state.length, compute_D(),
+             PREFS.live_normal_velocity.value,
+             PREFS.live_accent_velocity.value,
+             PREFS.live_loop.value, out)
+    renoise.app():show_status("MIDI-live preview en cours…")
+  end
+
+  local toolbar_play = vb:row {
+    vb:button { text = "▶ Preview", width = 90, notifier = go_preview },
+    vb:button { text = "■ Stop", width = 70, notifier = lp_stop },
+    vb:checkbox { value = PREFS.live_loop.value,
+                  notifier = function(v) PREFS.live_loop.value = v end },
+    vb:text { text = "loop" },
+    vb:checkbox { value = PREFS.live_sync_bpm.value,
+                  notifier = function(v) PREFS.live_sync_bpm.value = v end },
+    vb:text { text = "sync BPM" },
+    vb:text { text = "  step =" },
+    vb:popup {
+      items = (function() local t = {} for _, r in ipairs(STEP_RATES) do
+                 table.insert(t, r.label) end return t end)(),
+      value = PREFS.live_step_rate_index.value,
+      notifier = function(v) PREFS.live_step_rate_index.value = v end,
+      width = 90 },
+    vb:text { text = "  step ms" },
+    vb:valuebox { min = 20, max = 1000, value = PREFS.live_step_ms.value,
+                  notifier = function(v) PREFS.live_step_ms.value = v end },
+    vb:button { text = "Clear", width = 60,
+      notifier = function() state.steps = new_live_steps()
+        select_step(1); repaint_all(); on_change() end },
+    vb:button { text = "Panic", width = 60,
+      notifier = function()
+        local out = get_midi_out(PREFS.midi_out_name.value)
+        if out then for n = 0, 127 do send_short(out, 0x80, n, 0x40) end end
+      end },
+    vb:button { text = "→ Piste Renoise", width = 130,
+      tooltip = "Écrit le pattern (notes + accent + slide + delay + ratchet) dans la piste/pattern Renoise courants pour édition native au-delà des limites TD-3.",
+      notifier = function() lp_export_to_track(state.steps, state.length) end },
+  }
+
+  status_view = vb:text { text = "" }
+
+  local items = { toolbar_io, toolbar_play, toolbar_fx, vb:space { height = 6 } }
+  for _, r in ipairs(oct_rows)   do table.insert(items, r) end
+  table.insert(items, vb:space { height = 4 })
+  for _, r in ipairs(pitch_rows) do table.insert(items, r) end
+  table.insert(items, vb:space { height = 4 })
+  table.insert(items, slide_row)
+  table.insert(items, accent_row)
+  table.insert(items, vb:space { height = 4 })
+  table.insert(items, fx_row)
+  table.insert(items, vb:space { height = 6 })
+  table.insert(items, status_view)
+
+  local cdef = { margin = 8, spacing = 2 }
+  for i, c in ipairs(items) do cdef[i] = c end
+
+  sync_fx_boxes(); repaint_all(); status()
+  if _live_dialog and _live_dialog.visible then _live_dialog:close() end
+  _live_dialog = renoise.app():show_custom_dialog(
+    "TD-3 MIDI-live (32 pas + FX)", vb:column(cdef))
+end
+
 -- Menu / keybinding registration -------------------------------------------
 
 renoise.tool():add_menu_entry {
   name   = "Main Menu:Tools:TD-3 Pattern Editor...",
   invoke = show_dialog,
+}
+renoise.tool():add_menu_entry {
+  name   = "Main Menu:Tools:TD-3 MIDI-live (32 pas + FX)...",
+  invoke = show_live_dialog,
+}
+renoise.tool():add_menu_entry {
+  name   = "Pattern Editor:TD-3 MIDI-live (32 pas + FX)...",
+  invoke = show_live_dialog,
+}
+renoise.tool():add_keybinding {
+  name   = "Global:Tools:TD-3 MIDI-live",
+  invoke = show_live_dialog,
 }
 renoise.tool():add_menu_entry {
   name   = "Pattern Editor:TD-3 Pattern Editor...",
