@@ -439,16 +439,16 @@ local watch_renoise_transport
 local unwatch_renoise_transport
 
 local function all_notes_off(out)
-  -- Belt and suspenders : Note OFF for every possible pitch, then CC 123
-  -- (All Notes Off), CC 120 (All Sound Off), and the MIDI System Real-Time
-  -- Stop (0xFC) to halt any internal sequencer that may have been started.
+  -- Note OFF pour toutes les pitches + CC 123 (All Notes Off) + CC 120
+  -- (All Sound Off). On N'ENVOIE PAS de MIDI Stop (0xFC) : en clock
+  -- source MIDI USB la TD-3 passe en "stopped" et ignore ensuite les
+  -- notes/CC entrants (régression cutoff + slide constatée).
   if not out then return end
   for n = 0, 127 do
     send_short(out, 0x80, n, 0x40)
   end
   send_short(out, 0xB0, 123, 0)
   send_short(out, 0xB0, 120, 0)
-  out:send { 0xFC }  -- MIDI Stop (system real-time, no channel)
 end
 
 local function preview_stop()
@@ -456,7 +456,7 @@ local function preview_stop()
     renoise.tool():remove_timer(_preview_timer)
   end
   _preview_timer = nil
-  unwatch_renoise_transport()
+  unwatch_renoise_transport()  -- no-op si jamais armé
   if _preview_state and _preview_state.out then
     all_notes_off(_preview_state.out)
   end
@@ -497,10 +497,12 @@ end
 
 local function preview_start(get_step, step_ms, normal_vel, accent_vel, loop, out)
   preview_stop()
-  -- Coupe le séquenceur interne TD-3 + arme un hook sur Renoise transport
-  -- pour re-couper à chaque Renoise Play tant que ce Preview tourne.
-  inhibit_td3_sequencer(out)
-  watch_renoise_transport(out)
+  -- NB : on n'envoie PLUS de MIDI Stop (0xFC) automatique ici. En clock
+  -- source MIDI USB, la TD-3 passe en "stopped" sur 0xFC et ignore alors
+  -- les notes ET les CC entrants → on perdait cutoff + slide. Pour éviter
+  -- que le séquenceur interne TD-3 se lance en parallèle, désactiver
+  -- "MIDI Clock Master Output" vers le port TD-3 dans
+  -- Edit → Preferences → MIDI côté Renoise (solution propre et permanente).
   -- active_notes : pile des Note On envoyés sans Note Off correspondant.
   -- Une chaîne de slides empile plusieurs notes sans les relâcher pour
   -- garder le gate TD-3 ouvert (= legato). Sur le premier step non-slide
