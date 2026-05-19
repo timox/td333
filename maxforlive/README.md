@@ -11,8 +11,16 @@ TD-3-MO** en SysEx, ou la relire (Read).
 |---|---|
 | `td3.js` | codec pur (port fidèle de `td3.lua`). Marche dans `[js]` Max **et** en Node. |
 | `td3_device.js` | glu Max : état du pattern, build/parse SysEx, pilotage UI. |
-| `TD-3 Pattern Editor.maxpat` | patcher (UI + câblage MIDI). |
+| `TD-3 Pattern Editor.maxpat` | patcher SysEx (UI + câblage MIDI). |
+| `td3_live.js` | MIDI Effect « live » : accent/slide/cutoff, pas de SysEx. |
+| `TD-3 Live.maxpat` | patcher du device live (TD-3 jouée en instrument). |
 | `test_td3.mjs` | test Node : compare `td3.js` à la lib Python **byte-exact**. |
+| `test_td3_live.mjs` | test Node : transformation accent/slide/cutoff. |
+
+Deux devices distincts :
+- **TD-3 Pattern Editor** : programme/lit un slot mémoire (SysEx).
+- **TD-3 Live** : joue la TD-3 comme module de son (accent = vélocité ≥
+  seuil, slide = legato monophonique, cutoff CC74). Aucun stockage.
 
 ## Vérification du codec (sans Max)
 
