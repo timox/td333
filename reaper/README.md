@@ -31,8 +31,11 @@ Copier `td3_sysex_send.jsfx` dans le dossier des effets JS de Reaper :
 
 ## 2. Routing MIDI (c'est ICI qu'on choisit le device « TD-3-MO »)
 
-Un JSFX **ne peut pas** énumérer les périphériques MIDI (limite du format) :
-le choix du device se fait dans le routing de la piste.
+Un JSFX **ne peut pas** énumérer les périphériques MIDI, ni en saisir le nom
+au clavier (pas de champ texte), ni router le MIDI vers un device par son
+nom : sa sortie MIDI part toujours vers la **sortie de la piste**. Le device
+`TD-3-MO` se choisit donc **une seule fois** dans le routing de la piste —
+c'est la seule façon dont un JSFX émet du MIDI vers du matériel.
 
 1. **Sortie** : sur la piste, **Route → MIDI Hardware Output → `TD-3-MO`**
    (le port de sortie). C'est par là que partent les SysEx + notes.
@@ -81,14 +84,18 @@ le choix du device se fait dans le routing de la piste.
 | `gfx_*` (affichage) | reaper.fm/sdk/js/gfx.php |
 | `sprintf` / `strcpy` / `%s` | reaper.fm/sdk/js/strings.php |
 
-## 5. Test
+## 5. Auto-test (dans Reaper, aucune dépendance)
 
-La logique de protocole du JSFX (trames SysEx + décodage 0x78) est un port
-exact de `src/td3`. Le test `tests/test_reaper_jsfx.py` rejoue cette
-arithmétique en Python et la **confronte à la lib de référence** (trames
-identiques à `td3.config`/`td3.sysex`, décodage identique à
-`Pattern.from_bytes`). Lancer :
+Le JSFX embarque un **auto-test qui s'exécute au chargement**, directement
+dans Reaper (`function selftest()`), sans Python ni outil externe :
 
-```bash
-python -m pytest tests/test_reaper_jsfx.py -q
-```
+- il fabrique une trame `0x78` synthétique avec un mini-encodeur (miroir de
+  `pattern.py to_bytes` : paires de nibbles + mask rest),
+- il la **décode avec le vrai code du plugin** (`decode_into`) et compare
+  pitch / accent / slide / rest / step_count / triplet + `storage_to_midi`,
+- il vérifie aussi l'en-tête et le placement d'opcode des trames SysEx.
+
+Le résultat s'affiche en haut de la fenêtre du plugin :
+**`Auto-test interne (trames + decodage 0x78) : PASS`** (vert) ou **`FAIL`**
+(rouge). Si tu modifies un offset/opcode et casses la cohérence, ça passe
+au rouge immédiatement à l'ouverture.

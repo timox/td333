@@ -86,6 +86,7 @@ PAT_RST   = 4096; // [64*16] rest 0/1
 PAT_SC    = 5120; // [64]    step_count
 PAT_TRP   = 5184; // [64]    triplet 0/1
 PAT_OK    = 5248; // [64]    1 = pattern recu/decode
+TSTR      = 5400; // [16]    scratch auto-test (rest bits)
 
 play_on = 0; seq_on = 0; req_pending = 0;
 cfg_have = 0; fw_have = 0; nactive = 0; smp_to_next = 0; clk_to_next = 0;
@@ -302,6 +303,66 @@ function pump_bank()
   );
 );
 
+// ---- AUTO-TEST INTERNE (tourne dans Reaper, au chargement) ------------------
+// Pas de dependance externe : on fabrique une trame 0x78 synthetique avec un
+// mini-encodeur (miroir de pattern.py to_bytes : paires de nibbles + mask
+// rest), on la decode avec decode_into, et on compare au pattern d'origine.
+// Couvre aussi la construction d'entete/opcode des trames SysEx.
+// [REPO pattern.py to_bytes / _encode_pairs / _MASK_LAYOUT]
+function enc_pair(addr,v) ( RXBUF[addr]=floor(v/16)%16; RXBUF[addr+1]=v%16; );
+function enc_mask(addr,s3,s2,s1,s0)
+( RXBUF[addr] = (TSTR[s3]?8:0)+(TSTR[s2]?4:0)+(TSTR[s1]?2:0)+(TSTR[s0]?1:0); );
+
+function selftest() local(s,fail,pit)
+(
+  fail = 0;
+
+  // a) Entete/opcode des trames (sans emettre : on inspecte TXBUF).
+  syx_begin(); syx_push(0x1B); syx_push(2);
+  (TXBUF[0]==0xF0 && TXBUF[1]==0x00 && TXBUF[2]==0x20 && TXBUF[3]==0x32 &&
+   TXBUF[4]==0x00 && TXBUF[5]==0x01 && TXBUF[6]==0x0A &&
+   TXBUF[7]==0x1B && TXBUF[8]==2) ? 0 : fail+=1;
+
+  // b) Trame 0x78 synthetique : pitch=24+(s*5+3)%37 (midi), accent s%3==0,
+  //    slide s%4==1, rest s%5==2, step_count 13, triplet 0.
+  s=0; loop(123, RXBUF[s]=0; s+=1; );
+  RXBUF[0]=0xF0;RXBUF[1]=0x00;RXBUF[2]=0x20;RXBUF[3]=0x32;RXBUF[4]=0x00;RXBUF[5]=0x01;RXBUF[6]=0x0A;
+  RXBUF[7]=0x78; RXBUF[8]=0; RXBUF[9]=0;
+  s=0; loop(16,
+    pit = (24+(s*5+3)%37) - 12;            // storage = midi - 12
+    enc_pair(10+0x02+2*s, pit);
+    enc_pair(10+0x22+2*s, (s%3==0)?1:0);
+    enc_pair(10+0x42+2*s, (s%4==1)?1:0);
+    TSTR[s] = (s%5==2)?1:0;
+    s+=1;
+  );
+  enc_pair(10+0x64, 13);                    // step_count
+  enc_mask(10+0x6C, 7,6,5,4);               // rest mask [REPO _MASK_LAYOUT]
+  enc_mask(10+0x6D, 3,2,1,0);
+  enc_mask(10+0x6E, 15,14,13,12);
+  enc_mask(10+0x6F, 11,10,9,8);
+  RXBUF[122]=0xF7;
+
+  decode_into(0, 10);                       // decode reel du plugin
+
+  s=0; loop(16,
+    pit = (24+(s*5+3)%37) - 12;
+    PAT_PITCH[s] != pit            ? fail+=1;
+    PAT_ACC[s]   != ((s%3==0)?1:0) ? fail+=1;
+    PAT_SLD[s]   != ((s%4==1)?1:0) ? fail+=1;
+    PAT_RST[s]   != ((s%5==2)?1:0) ? fail+=1;
+    (((PAT_PITCH[s]%128)+12) != (24+(s*5+3)%37)) ? fail+=1;  // storage_to_midi
+    s+=1;
+  );
+  PAT_SC[0]  != 13 ? fail+=1;
+  PAT_TRP[0] != 0  ? fail+=1;
+
+  PAT_OK[0] = 0;                            // ne pas afficher slot 0 "charge"
+  selftest_fail = fail; selftest_done = 1;
+);
+
+selftest();
+
 @slider
 // Rien : tous les declenchements sont geres en @block (front montant) pour
 // que les midisend_buf partent dans le flux MIDI du bloc.   [JSFX midi.php]
@@ -343,6 +404,12 @@ function rate_name(v)
   v==2?strcpy(#tmp,"24 PPQ"):strcpy(#tmp,"48 PPQ"); );
 function prio_name(v)
 ( v==0?strcpy(#tmp,"Low"):v==1?strcpy(#tmp,"High"):strcpy(#tmp,"Last"); );
+
+// --- Auto-test interne (au chargement) ---
+selftest_done ? ( selftest_fail==0 ? gfx_set(0.4,1,0.4,1) : gfx_set(1,0.3,0.3,1) )
+              : gfx_set(0.6,0.6,0.6,1);
+sprintf(#r,"Auto-test interne (trames + decodage 0x78) : %s",
+        selftest_done ? (selftest_fail==0 ? "PASS" : "FAIL") : "-"); line(#r);
 
 // --- Etat reellement compris par la TD-3 (read-back) ---
 gfx_set(0.7,0.85,1,1);
