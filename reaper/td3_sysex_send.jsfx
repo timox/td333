@@ -45,6 +45,32 @@ author: timox
 //   3. Preferences -> MIDI : NE PAS activer "Send clock to TD-3-MO" cote
 //      Reaper (ce JSFX genere lui-meme F8 pour le sequenceur interne ;
 //      cf. avertissement equivalent dans le README Renoise).
+//
+// Note device : un JSFX ne peut PAS lister ni saisir un peripherique MIDI,
+// ni router vers un device par son nom -> sa sortie part vers la sortie de
+// la PISTE. Le choix "TD-3-MO" se fait donc une seule fois dans le routing
+// de la piste (ci-dessus). C'est natif Reaper, pas du code en plus.
+//
+// INSTALLATION
+//   Options -> Show REAPER resource path -> dossier Effects/ ; y deposer ce
+//   .jsfx ; sur une piste : FX -> Add -> JS: td3_sysex_send.
+//
+// MODE D'EMPLOI (un seul fichier, tout est dans les sliders)
+//   1. Clock source = MIDI USB, Clock rate = 24 PPQ, canal -> "Envoyer config".
+//   2. "Verifier" : l'ecran affiche firmware + config relue (diagnostic OK/!!).
+//   3. "Lire la banque" : le compteur "Banque lue : N/64" monte.
+//   4. Choisir "Pattern a jouer", regler velocites + horloge -> "Play banque
+//      en MIDI" (TD-3 = module de son). "Stop preview" coupe (All-Notes-Off,
+//      jamais 0xFC qui figerait la TD-3 en clock USB).
+//   5. Variante vrai son 303 : "Start sequenceur interne" (FA + F8) joue le
+//      pattern selectionne SUR LA FACADE (la selection de slot n'a aucun
+//      opcode SysEx) ; "Stop sequenceur interne" = FC.
+//
+// AUTO-TEST : function selftest() s'execute au CHARGEMENT, dans Reaper, sans
+//   dependance. Elle fabrique une trame 0x78 synthetique, la decode avec le
+//   vrai code (decode_into) et compare pitch/accent/slide/rest/step_count/
+//   triplet + storage_to_midi + entete/opcode. Resultat PASS/FAIL en haut de
+//   la fenetre (@gfx). Casse un offset/opcode -> FAIL immediat a l'ouverture.
 // ===========================================================================
 
 in_pin:none
