@@ -9,3 +9,5 @@ dist/
 !/patterns/library/
 *.syx
 !td3dump.sqs
+controllers/minilab-mkii/minilab_renoise.xrnm
+src/td3/td3_cc_discovered.json

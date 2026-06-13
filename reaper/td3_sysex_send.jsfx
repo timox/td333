@@ -1,0 +1,37 @@
+desc:TD-3 SysEx sender (clock source + rate)
+// Envoie les trames SysEx Behringer confirmees (repo timox/td333, config.py).
+// Header : F0 00 20 32 00 01 0A <op> <val> F7  (un octet de payload, pas de checksum)
+//   0x1B clock source : 0=Int 1=DIN 2=USB 3=Trig
+//   0x1A clock rate   : 0=1PPS 1=2PPQ 2=24PPQ 3=48PPQ
+//   0x1C accent thr   : 0..127
+//
+// Placer ce JSFX sur une piste dont la SORTIE MATERIELLE MIDI va au TD-3 (USB).
+// Bouger un slider "Envoyer" de 0 a 1 declenche l'envoi (front montant).
+// Le TD-3 repond l'ACK F0 00 20 32 00 01 0A 01 00 00 F7.
+
+in_pin:none
+out_pin:none
+
+slider1:go_usb=0<0,1,1>Envoyer : clock source = USB (1B 02)
+slider2:go_24=0<0,1,1>Envoyer : clock rate = 24 PPQ (1A 02)
+slider3:op_x=27<0,127,1>[avance] opcode libre
+slider4:val_x=2<0,127,1>[avance] valeur libre
+slider5:go_x=0<0,1,1>[avance] Envoyer trame libre
+
+@init
+l_usb = 0; l_24 = 0; l_x = 0;
+
+@block
+function send3(op, val) (
+  buf = 1000;
+  buf[0]=0xF0; buf[1]=0x00; buf[2]=0x20; buf[3]=0x32;
+  buf[4]=0x00; buf[5]=0x01; buf[6]=0x0A;
+  buf[7]=op; buf[8]=val; buf[9]=0xF7;
+  midisend_buf(0, buf, 10);
+);
+
+(go_usb > 0.5 && l_usb < 0.5) ? send3(0x1B, 2);   // clock source USB
+(go_24  > 0.5 && l_24  < 0.5) ? send3(0x1A, 2);   // rate 24 PPQ
+(go_x   > 0.5 && l_x   < 0.5) ? send3(op_x, val_x);
+
+l_usb = go_usb; l_24 = go_24; l_x = go_x;
