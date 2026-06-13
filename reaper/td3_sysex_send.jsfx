@@ -421,7 +421,7 @@ gfx_set(1,1,1,1); gfx_x=10; gfx_y=8;
 gfx_drawstr("TD-3-MO controller  -  config / verification / preview");
 
 yy = 34;
-function line(#s) ( gfx_x=12; gfx_y=yy; gfx_drawstr(#s); yy+=18; );
+function line(str) ( gfx_x=12; gfx_y=yy; gfx_drawstr(str); yy+=18; );
 function clk_name(v)
 ( v==0?strcpy(#tmp,"Internal"):v==1?strcpy(#tmp,"MIDI DIN"):
   v==2?strcpy(#tmp,"MIDI USB"):strcpy(#tmp,"Trigger"); );
