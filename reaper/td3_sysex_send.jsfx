@@ -134,6 +134,12 @@ function is_td3(len)
 );
 function handle_rx(len) local(op,idx)
 (
+  // Diagnostic : compte TOUT ce qui entre dans le JSFX (preuve que le
+  // routing input + monitoring fonctionne). rx_total reste a 0 => le MIDI
+  // de la TD-3 n'arrive pas (piste pas armee / pas de monitoring).
+  rx_total += 1;
+  RXBUF[0]==0xF0 ? ( rx_sysex += 1; last_op = RXBUF[7]; last_len = len; );
+
   is_td3(len) ? (
     op = RXBUF[7];
     (op==0x76 && len>=18) ? (
