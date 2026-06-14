@@ -118,6 +118,8 @@ play_on = 0; seq_on = 0; req_pending = 0;
 cfg_have = 0; fw_have = 0; nactive = 0; smp_to_next = 0; clk_to_next = 0;
 ch = 0; psel = 0; prev_len = 16; step_samps = 4800; clk_samps = 4800;
 rx_total = 0; rx_sysex = 0; last_op = 0; last_len = 0;   // diagnostic entree
+last_s1 = slider1; last_s2 = slider2; last_s3 = slider3; last_s4 = slider4;
+verify_pending = 0; verify_to = 0;
 
 // ---- Emission SysEx : header fabricant + payload + F7 -----------------------
 // [REPO sysex.py MFR_HEADER = 00 20 32 00 01 0A] [JSFX midi.php midisend_buf]
@@ -144,6 +146,10 @@ function req_pattern(g,p)
 
 // Realtime 1-octet (FA/F8/FC).        [REPO docs/td3-mo-fr.md] [JSFX midi.php]
 function rt(off,st) ( TXBUF[0]=st; midisend_buf(off,TXBUF,1); );
+
+// Arme une relecture de config ~0.3 s plus tard (laisse le temps a la TD-3
+// de repondre), pour rafraichir l'affichage apres un changement de reglage.
+function arm_verify() ( verify_pending=1; verify_to=floor(0.3*srate); );
 
 // ---- Notes (TD-3 = module de son) ------------------------------------------
 function noteon(off,n,v)  ( midisend(off, 0x90+ch, n, v); );
@@ -418,7 +424,17 @@ slider15>0.5 ? ( stop_preview(); slider15=0; );
 slider16>0.5 ? ( start_seq(); slider16=0; );
 slider17>0.5 ? ( stop_seq(); slider17=0; );
 
+// 2b) Changement d'un reglage -> envoi SysEx immediat + relecture auto de
+// l'etat (l'affichage se met a jour tout seul apres le changement).
+slider1 != last_s1 ? ( syx1(0x1B,slider1);             last_s1=slider1; arm_verify(); );
+slider2 != last_s2 ? ( syx1(0x1A,slider2);             last_s2=slider2; arm_verify(); );
+slider3 != last_s3 ? ( syx1(0x1C,slider3);             last_s3=slider3; arm_verify(); );
+slider4 != last_s4 ? ( set_channels(slider4,slider4);  last_s4=slider4; arm_verify(); );
+
 // 3) Taches continues.
+verify_pending ? ( verify_to -= samplesblock;
+  verify_to <= 0 ? ( cfg_have=0; fw_have=0; rx_total=0; rx_sysex=0; last_op=0;
+                     req_fw(); req_config(); verify_pending=0; ); );
 req_pending ? pump_bank();
 play_on ? run_preview();
 (seq_on && slider18>0.5) ? run_clockgen();
