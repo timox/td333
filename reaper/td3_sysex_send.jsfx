@@ -117,6 +117,7 @@ TSTR      = 5400; // [16]    scratch auto-test (rest bits)
 play_on = 0; seq_on = 0; req_pending = 0;
 cfg_have = 0; fw_have = 0; nactive = 0; smp_to_next = 0; clk_to_next = 0;
 ch = 0; psel = 0; prev_len = 16; step_samps = 4800; clk_samps = 4800;
+rx_total = 0; rx_sysex = 0; last_op = 0; last_len = 0;   // diagnostic entree
 
 // ---- Emission SysEx : header fabricant + payload + F7 -----------------------
 // [REPO sysex.py MFR_HEADER = 00 20 32 00 01 0A] [JSFX midi.php midisend_buf]
@@ -196,6 +197,12 @@ function is_td3(len)
 // ---- Traitement d'un message recu ------------------------------------------
 function handle_rx(len) local(op,idx)
 (
+  // Diagnostic : compte TOUT ce qui entre dans le JSFX (preuve que le
+  // routing input + monitoring fonctionne). rx_total reste a 0 => le MIDI
+  // de la TD-3 n'arrive pas (piste pas armee / pas de monitoring).
+  rx_total += 1;
+  RXBUF[0]==0xF0 ? ( rx_sysex += 1; last_op = RXBUF[7]; last_len = len; );
+
   is_td3(len) ? (
     op = RXBUF[7];
     // Config dump 0x76 : 10 octets payload.            [REPO config.py 0x76]
@@ -403,7 +410,8 @@ while ( (rlen = midirecv_buf(moff, RXBUF, 256)) > 0 ) ( handle_rx(rlen); );
 // 2) Declencheurs (sliders momentanes auto-remis a 0).
 slider5>0.5 ? ( syx1(0x1B,slider1); syx1(0x1A,slider2); syx1(0x1C,slider3);
                 set_channels(slider4,slider4); slider5=0; );
-slider6>0.5 ? ( cfg_have=0; fw_have=0; req_fw(); req_config(); slider6=0; );
+slider6>0.5 ? ( cfg_have=0; fw_have=0; rx_total=0; rx_sysex=0; last_op=0;
+                req_fw(); req_config(); slider6=0; );
 slider7>0.5 ? ( start_read_bank(); slider7=0; );
 slider14>0.5 ? ( start_preview(); slider14=0; );
 slider15>0.5 ? ( stop_preview(); slider15=0; );
@@ -440,6 +448,11 @@ sprintf(#r,"Auto-test interne (trames + decodage 0x78) : %s",
 // --- Etat reellement compris par la TD-3 (read-back) ---
 gfx_set(0.7,0.85,1,1);
 line("=== Ce que la TD-3 a repondu (request 0x76 / 0x09) ===");
+// Diagnostic du flux ENTRANT : si "MIDI in recu" reste a 0 apres Verifier,
+// la piste n'est pas armee / pas de monitoring -> le retour TD-3 n'arrive pas.
+rx_total>0 ? gfx_set(0.4,1,0.4,1) : gfx_set(1,0.65,0,1);
+sprintf(#r,"MIDI in recu : %d msg / %d sysex (dernier op %d, len %d)  [118=cfg 9=fw 120=pat]",
+        rx_total, rx_sysex, last_op, last_len); line(#r);
 gfx_set(1,1,1,1);
 fw_have ? ( sprintf(#r,"Firmware : %d.%d.%d", fw_maj,fw_min,fw_rev); line(#r); )
         : line("Firmware : (pas de reponse - verifier routing MIDI IN + monitoring)");
