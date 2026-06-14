@@ -302,6 +302,10 @@ function run_preview() local(rem,off)
 function start_seq()
 (
   play_on ? ( panic(0); play_on=0; );
+  // En sync USB la TD-3 est ESCLAVE de l'horloge : elle n'avance que sur les
+  // F8. Un Start (FA) seul ne joue rien sans clock -> on force la generation
+  // d'horloge avec le Start.            [REPO docs/td3-mo-fr.md Real-Time]
+  slider18 = 1;
   rt(0,0xFA);                              // MIDI Start
   seq_on = 1; clk_to_next = 1;
 );
