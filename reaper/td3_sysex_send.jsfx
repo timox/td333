@@ -1,206 +1,137 @@
-desc:TD-3-MO controller (config SysEx + verification read-back + lecture banque + preview MIDI)
+desc:TD-3-MO Reaper check (config + bank preview + FA/F8 clock test)
 tags: MIDI Behringer TD-3 TD-3-MO acid 303
 author: timox
 
-// ===========================================================================
-// TD-3-MO controller JSFX
-// ---------------------------------------------------------------------------
-// Tout le code ci-dessous est REFERENCE. Deux familles de sources :
+// Minimal TD-3-MO diagnostic controller for Reaper.
 //
-//   [REPO] = ce depot (protocole TD-3, deja teste sur device)
-//     - src/td3/config.py : opcodes config (0x0E/0x1A/0x1B/0x1C/0x75/0x76,
-//       0x08/0x09) + layout exact de la reponse config 0x76 (10 octets).
-//     - src/td3/sysex.py  : header fabricant F0 00 20 32 00 01 0A, opcodes
-//       0x77 (request pattern) / 0x78 (pattern data, payload group,pat,112).
-//     - src/td3/pattern.py: bloc 112 octets (paires de nibbles pour
-//       pitch/accent/slide, mask rest layout 7654/3210/FEDC/BA98).
-//     - src/td3/notes.py  : storage_to_midi(raw) = (raw & 0x7F) + 12.
-//     - renoise/.../td3.lua    : decode_data / parse_sysex_pattern (port Lua).
-//     - renoise/.../main.lua   : preview_start (l.534-599) = legato slide +
-//       velocite accent ; all_notes_off (l.477-488) ; transport FA/F8/FC
-//       (commentaires l.502-541, "la TD-3 recoit MIDI Start (FA) et lance
-//       son sequenceur interne").
-//     - docs/td3-mo-fr.md      : table Real-Time (F8 clock / FA start /
-//       FC stop) + table clock source/rate (Selector 1-4 / 5-8).
+// Routing in Reaper:
+//   1. Track MIDI Hardware Output -> TD-3-MO.
+//   2. Track MIDI Input -> TD-3-MO, record-arm + monitoring ON.
+//   3. Do not also enable Reaper "Send clock to TD-3-MO"; this JSFX emits F8.
 //
-//   [JSFX] = documentation officielle Reaper (https://www.reaper.fm/sdk/js/)
-//     - midi.php : midisend(off,s,d1,d2), midisend_buf(off,buf,len) (sysex,
-//       auto F0/F7), midirecv_buf(off,buf,maxlen) -> longueur recue.
-//     - js.php   : variables samplesblock, srate, tempo ; sections @init,
-//       @slider, @block, @gfx ; sliders.
-//     - gfx.php  : gfx_set / gfx_x / gfx_y / gfx_drawstr.
-//     - strings.php : sprintf / strcpy / %s / %d.
-//
-// NB lecture fichier : reaper.fm/sdk/js/file.php ne documente PAS l'unite
-// des octets pour un fichier binaire brut (file_var/file_mem). On NE lit
-// donc AUCUN .sqs/.syx sur disque (ce serait non-referencable). La banque
-// est lue DEPUIS la TD-3 (0x77/0x78), ce qui est entierement documente.
-//
-// ROUTING REAPER (le device "TD-3-MO" se choisit ici, pas dans le JSFX :
-// un JSFX ne peut pas enumerer les peripheriques MIDI) :
-//   1. Piste : MIDI Hardware Output -> "TD-3-MO" (port de SORTIE).
-//   2. Piste : Input = "TD-3-MO" (port d'ENTREE) + Record-arm + Monitoring
-//      ON, pour que les reponses SysEx de la TD-3 (0x76/0x09/0x78)
-//      reviennent dans ce JSFX via midirecv_buf.
-//   3. Preferences -> MIDI : NE PAS activer "Send clock to TD-3-MO" cote
-//      Reaper (ce JSFX genere lui-meme F8 pour le sequenceur interne ;
-//      cf. avertissement equivalent dans le README Renoise).
-//
-// Note device : un JSFX ne peut PAS lister ni saisir un peripherique MIDI,
-// ni router vers un device par son nom -> sa sortie part vers la sortie de
-// la PISTE. Le choix "TD-3-MO" se fait donc une seule fois dans le routing
-// de la piste (ci-dessus). C'est natif Reaper, pas du code en plus.
-//
-// INSTALLATION
-//   Options -> Show REAPER resource path -> dossier Effects/ ; y deposer ce
-//   .jsfx ; sur une piste : FX -> Add -> JS: td3_sysex_send.
-//
-// MODE D'EMPLOI (un seul fichier, tout est dans les sliders)
-//   1. Clock source = MIDI USB, Clock rate = 24 PPQ, canal -> "Envoyer config".
-//   2. "Verifier" : l'ecran affiche firmware + config relue (diagnostic OK/!!).
-//   3. "Lire la banque" : le compteur "Banque lue : N/64" monte.
-//   4. Choisir "Pattern a jouer", regler velocites + horloge -> "Play banque
-//      en MIDI" (TD-3 = module de son). "Stop preview" coupe (All-Notes-Off,
-//      jamais 0xFC qui figerait la TD-3 en clock USB).
-//   5. Variante vrai son 303 : "Start sequenceur interne" (FA + F8) joue le
-//      pattern selectionne SUR LA FACADE (la selection de slot n'a aucun
-//      opcode SysEx) ; "Stop sequenceur interne" = FC.
-//
-// AUTO-TEST : function selftest() s'execute au CHARGEMENT, dans Reaper, sans
-//   dependance. Elle fabrique une trame 0x78 synthetique, la decode avec le
-//   vrai code (decode_into) et compare pitch/accent/slide/rest/step_count/
-//   triplet + storage_to_midi + entete/opcode. Resultat PASS/FAIL en haut de
-//   la fenetre (@gfx). Casse un offset/opcode -> FAIL immediat a l'ouverture.
-// ===========================================================================
+// What the repo confirms:
+//   - Config read/write: src/td3/config.py, opcodes 0x0E/0x1A/0x1B/0x1C/0x75/0x76.
+//   - Firmware read: 0x08 request, 0x09 response.
+//   - Pattern read: src/td3/sysex.py, 0x77 request, 0x78 response.
+//   - Pattern data: src/td3/pattern.py, 112-byte block, rest mask layout
+//     7654/3210/FEDC/BA98, storage_to_midi(raw) = (raw & 0x7F) + 12.
+//   - Real-time MIDI: docs/td3-mo-fr.md, F8 clock, FA start, FC stop.
+//   - No known SysEx can select the active TD-3 front-panel slot. MIDI Start
+//     plays the pattern selected manually on the TD-3 faceplate.
 
 in_pin:none
 out_pin:none
 
-// --- Config TD-3 (ecrite par SysEx) ---------------------------------------
-slider1:2<0,3,1{Internal,MIDI DIN,MIDI USB,Trigger}>Clock source  [REPO config.py 0x1B]
-slider2:2<0,3,1{1 PPS,2 PPQ,24 PPQ,48 PPQ}>Clock rate PPQ  [REPO config.py 0x1A]
-slider3:100<0,127,1>Accent velocity threshold  [REPO config.py 0x1C]
-slider4:1<1,16,1>MIDI channel (notes + 0x0E)  [REPO config.py 0x0E]
-slider5:0<0,1,1{-,GO}>>> Envoyer la config a la TD-3
-slider6:0<0,1,1{-,GO}>>> Verifier (request 0x75 + 0x08, lit 0x76/0x09)
-
-// --- Banque + preview MIDI (style Renoise) --------------------------------
-slider7:0<0,1,1{-,GO}>>> Lire la banque depuis la TD-3 (0x77/0x78)
-slider8:0<0,63,1>Pattern a jouer (0=I-1A ... 63=IV-8B)
-slider9:80<1,127,1>Velocite normale
-slider10:110<1,127,1>Velocite accent
-slider11:1<0,1,1{Manuel (ms),Sync tempo Reaper}>Horloge des pas
-slider12:2<0,4,1{1/4,1/8,1/16,1/32,1/64}>Step rate (en mode sync)
-slider13:125<20,1000,1>Step ms (en mode manuel)
-slider14:0<0,1,1{-,GO}>>> Play banque en MIDI (preview)
-slider15:0<0,1,1{-,GO}>>> Stop preview MIDI
-
-// --- Sequenceur interne TD-3 (Start/Clock/Stop) ---------------------------
-slider16:0<0,1,1{-,GO}>>> Start sequenceur interne (FA + clock F8)
-slider17:0<0,1,1{-,GO}>>> Stop sequenceur interne (FC)
-slider18:1<0,1,1{Off,On}>Generer MIDI clock (F8) pour le sequenceur interne
+// Main controls kept intentionally short.
+slider1:0<0,7,1{Idle,Change sync + verify,Check TD-3 state,Read full bank,Preview selected bank pattern,Stop preview,Start sequenceur interne (pattern facade),Stop sequenceur interne}>Action
+slider2:1<1,16,1>MIDI channel
+slider3:100<0,127,1>Accent velocity threshold
+slider4:2<0,3,1{Internal,MIDI DIN,MIDI USB,Trigger}>Clock source a ecrire
+slider5:2<0,3,1{1 PPS,2 PPQ,24 PPQ,48 PPQ}>Clock rate a ecrire
+slider6:0<0,3,1{I,II,III,IV}>Banque a jouer
+slider7:0<0,15,1{1A,2A,3A,4A,5A,6A,7A,8A,1B,2B,3B,4B,5B,6B,7B,8B}>Pattern dans la banque
+slider8:2<0,4,1{1/4,1/8,1/16,1/32,1/64}>Preview step rate
+slider9:80<1,127,1>Preview velocity
+slider10:110<1,127,1>Preview accent velocity
+slider11:1<0,1,1{Off,On}>Test sequenceur interne (FA + F8)
 
 @init
-// Bases memoire (arrays plats indexes par entier).            [JSFX js.php]
-RXBUF = 0;        // tampon reception midirecv_buf (maxlen 256)
-TXBUF = 300;      // tampon emission SysEx / realtime
-ACTIVE = 400;     // pile des notes actives (legato/slide)      [REPO main.lua]
-PAT_PITCH = 1024; // [64*16] storage pitch
-PAT_ACC   = 2048; // [64*16] accent 0/1
-PAT_SLD   = 3072; // [64*16] slide 0/1
-PAT_RST   = 4096; // [64*16] rest 0/1
-PAT_SC    = 5120; // [64]    step_count
-PAT_TRP   = 5184; // [64]    triplet 0/1
-PAT_OK    = 5248; // [64]    1 = pattern recu/decode
-TSTR      = 5400; // [16]    scratch auto-test (rest bits)
+RXBUF = 0;
+TXBUF = 300;
+ACTIVE = 400;
+PAT_PITCH = 1024;
+PAT_ACC   = 2048;
+PAT_SLD   = 3072;
+PAT_RST   = 4096;
+PAT_SC    = 5120;
+PAT_TRP   = 5184;
+PAT_OK    = 5248;
 
-play_on = 0; seq_on = 0; req_pending = 0;
-cfg_have = 0; fw_have = 0; nactive = 0; smp_to_next = 0; clk_to_next = 0;
-ch = 0; psel = 0; prev_len = 16; step_samps = 4800; clk_samps = 4800;
-rx_total = 0; rx_sysex = 0; last_op = 0; last_len = 0;   // diagnostic entree
-last_s1 = slider1; last_s2 = slider2; last_s3 = slider3; last_s4 = slider4;
-verify_pending = 0; verify_to = 0;
+play_on = 0;
+seq_on = 0;
+req_pending = 0;
+cfg_have = 0;
+fw_have = 0;
+nactive = 0;
+smp_to_next = 0;
+clk_to_next = 0;
+ch = 0;
+psel = 0;
+prev_len = 16;
+step_samps = 4800;
+clk_samps = 4800;
+last_action = 0;
+verify_pending = 0;
+verify_to_next = 0;
+status = 0; // 0 idle, 1 sync sent, 2 checking, 3 reading, 4 preview, 5 FA/F8
 
-// ---- Emission SysEx : header fabricant + payload + F7 -----------------------
-// [REPO sysex.py MFR_HEADER = 00 20 32 00 01 0A] [JSFX midi.php midisend_buf]
 function syx_begin()
-( TXBUF[0]=0xF0; TXBUF[1]=0x00; TXBUF[2]=0x20; TXBUF[3]=0x32;
-  TXBUF[4]=0x00; TXBUF[5]=0x01; TXBUF[6]=0x0A; txn=7; );
+(
+  TXBUF[0]=0xF0; TXBUF[1]=0x00; TXBUF[2]=0x20; TXBUF[3]=0x32;
+  TXBUF[4]=0x00; TXBUF[5]=0x01; TXBUF[6]=0x0A; txn=7;
+);
 function syx_push(b) ( TXBUF[txn]=b; txn+=1; );
 function syx_send() ( TXBUF[txn]=0xF7; txn+=1; midisend_buf(0,TXBUF,txn); );
-
 function syx1(op,v) ( syx_begin(); syx_push(op); syx_push(v); syx_send(); );
-
-// Set MIDI channels : payload [1, out-1, in-1].        [REPO config.py 0x0E]
 function set_channels(inc,outc)
-( syx_begin(); syx_push(0x0E); syx_push(1);
-  syx_push(outc-1); syx_push(inc-1); syx_send(); );
-
-// Request full config (0x75) / firmware (0x08).        [REPO config.py]
+(
+  syx_begin(); syx_push(0x0E); syx_push(1);
+  syx_push(outc-1); syx_push(inc-1); syx_send();
+);
 function req_config() ( syx_begin(); syx_push(0x75); syx_send(); );
-function req_fw()     ( syx_begin(); syx_push(0x08); syx_push(0); syx_send(); );
-
-// Request a pattern (0x77 group pat).                  [REPO sysex.py]
+function req_fw() ( syx_begin(); syx_push(0x08); syx_push(0); syx_send(); );
 function req_pattern(g,p)
-( syx_begin(); syx_push(0x77); syx_push(g); syx_push(p); syx_send(); );
-
-// Realtime 1-octet (FA/F8/FC).        [REPO docs/td3-mo-fr.md] [JSFX midi.php]
+(
+  syx_begin(); syx_push(0x77); syx_push(g); syx_push(p); syx_send();
+);
 function rt(off,st) ( TXBUF[0]=st; midisend_buf(off,TXBUF,1); );
 
-// Arme une relecture de config ~0.3 s plus tard (laisse le temps a la TD-3
-// de repondre), pour rafraichir l'affichage apres un changement de reglage.
-function arm_verify() ( verify_pending=1; verify_to=floor(0.3*srate); );
-
-// ---- Notes (TD-3 = module de son) ------------------------------------------
-function noteon(off,n,v)  ( midisend(off, 0x90+ch, n, v); );
-function noteoff(off,n)   ( midisend(off, 0x80+ch, n, 0x40); );
-// all_notes_off SANS 0xFC : en clock USB, FC fige la TD-3 et lui fait
-// ignorer notes+CC.                                    [REPO main.lua l.477-488]
+function noteon(off,n,v) ( midisend(off, 0x90+ch, n, v); );
+function noteoff(off,n) ( midisend(off, 0x80+ch, n, 0x40); );
 function release_all(off) local(i)
-( i=0; loop(nactive, noteoff(off, ACTIVE[i]); i+=1; ); nactive=0; );
+(
+  i=0; loop(nactive, noteoff(off, ACTIVE[i]); i+=1; );
+  nactive=0;
+);
 function panic(off)
-( release_all(off); midisend(off,0xB0+ch,123,0); midisend(off,0xB0+ch,120,0); );
+(
+  release_all(off);
+  midisend(off,0xB0+ch,123,0);
+  midisend(off,0xB0+ch,120,0);
+);
 
-// ---- Decodage bloc 112 octets (port pattern.py / td3.lua) ------------------
-// Paires de nibbles : val = (hi & 0x0F)<<4 | (lo & 0x0F)  (sans bitops :
-// arithmetique pure).                                  [REPO pattern.py _decode_pairs]
 function pair(o) ( (RXBUF[o]%16)*16 + (RXBUF[o+1]%16); );
-
-// Rest mask : 4 octets, nibble bas, bits 8/4/2/1 -> steps.
-// [REPO pattern.py _MASK_LAYOUT 0-based : 7654 / 3210 / FEDC / BA98]
 function set_rest(idx,nib,s3,s2,s1,s0)
-( PAT_RST[idx*16+s3] = floor(nib/8)%2;
+(
+  PAT_RST[idx*16+s3] = floor(nib/8)%2;
   PAT_RST[idx*16+s2] = floor(nib/4)%2;
   PAT_RST[idx*16+s1] = floor(nib/2)%2;
-  PAT_RST[idx*16+s0] = nib%2; );
-
-// base = offset RXBUF du 1er octet du bloc 112 (apres group,pat).
+  PAT_RST[idx*16+s0] = nib%2;
+);
 function decode_into(idx,base) local(s,sc)
 (
   s=0;
   loop(16,
-    PAT_PITCH[idx*16+s] = pair(base+0x02+2*s);        // pitches
-    PAT_ACC  [idx*16+s] = pair(base+0x22+2*s) % 2;     // accent
-    PAT_SLD  [idx*16+s] = pair(base+0x42+2*s) % 2;     // slide
+    PAT_PITCH[idx*16+s] = pair(base+0x02+2*s);
+    PAT_ACC[idx*16+s] = pair(base+0x22+2*s) % 2;
+    PAT_SLD[idx*16+s] = pair(base+0x42+2*s) % 2;
     s+=1;
   );
-  PAT_TRP[idx] = (pair(base+0x62) != 0) ? 1 : 0;       // triplet
-  sc = pair(base+0x64); sc==0 ? sc=16;                 // step_count
+  PAT_TRP[idx] = (pair(base+0x62) != 0) ? 1 : 0;
+  sc = pair(base+0x64); sc==0 ? sc=16;
   PAT_SC[idx] = sc;
-  set_rest(idx, RXBUF[base+0x6C]%16, 7,6,5,4);         // rest mask
+  set_rest(idx, RXBUF[base+0x6C]%16, 7,6,5,4);
   set_rest(idx, RXBUF[base+0x6D]%16, 3,2,1,0);
   set_rest(idx, RXBUF[base+0x6E]%16, 15,14,13,12);
   set_rest(idx, RXBUF[base+0x6F]%16, 11,10,9,8);
   PAT_OK[idx] = 1;
 );
 
-// ---- Verification entete fabricant d'un message recu -----------------------
-// [REPO sysex.py / config.py : F0 00 20 32 00 01 0A]
 function is_td3(len)
-( len>=9 && RXBUF[0]==0xF0 && RXBUF[1]==0x00 && RXBUF[2]==0x20 &&
-  RXBUF[3]==0x32 && RXBUF[4]==0x00 && RXBUF[5]==0x01 && RXBUF[6]==0x0A; );
-
-// ---- Traitement d'un message recu ------------------------------------------
+(
+  len>=9 && RXBUF[0]==0xF0 && RXBUF[1]==0x00 && RXBUF[2]==0x20 &&
+  RXBUF[3]==0x32 && RXBUF[4]==0x00 && RXBUF[5]==0x01 && RXBUF[6]==0x0A;
+);
 function handle_rx(len) local(op,idx)
 (
   // Diagnostic : compte TOUT ce qui entre dans le JSFX (preuve que le
@@ -211,20 +142,18 @@ function handle_rx(len) local(op,idx)
 
   is_td3(len) ? (
     op = RXBUF[7];
-    // Config dump 0x76 : 10 octets payload.            [REPO config.py 0x76]
     (op==0x76 && len>=18) ? (
-      cfg_out_ch  = RXBUF[8]+1;  cfg_in_ch   = RXBUF[9]+1;
-      cfg_transp  = RXBUF[10]-12; cfg_pb     = RXBUF[11];
-      cfg_keyprio = RXBUF[12];   cfg_multi   = RXBUF[13];
-      cfg_clkpol  = RXBUF[14];   cfg_clkrate = RXBUF[15];
-      cfg_clksrc  = RXBUF[16];   cfg_accthr  = RXBUF[17];
+      cfg_out_ch = RXBUF[8]+1; cfg_in_ch = RXBUF[9]+1;
+      cfg_transp = RXBUF[10]-12; cfg_pb = RXBUF[11];
+      cfg_keyprio = RXBUF[12]; cfg_multi = RXBUF[13];
+      cfg_clkpol = RXBUF[14]; cfg_clkrate = RXBUF[15];
+      cfg_clksrc = RXBUF[16]; cfg_accthr = RXBUF[17];
       cfg_have = 1;
     );
-    // Firmware 0x09 : [0,maj,min,rev].                 [REPO config.py 0x09]
     (op==0x09 && len>=12) ? (
-      fw_maj = RXBUF[9]; fw_min = RXBUF[10]; fw_rev = RXBUF[11]; fw_have = 1;
+      fw_maj = RXBUF[9]; fw_min = RXBUF[10]; fw_rev = RXBUF[11];
+      fw_have = 1;
     );
-    // Pattern dump 0x78 : group,pat,112 data.          [REPO sysex.py 0x78]
     (op==0x78 && len>=123) ? (
       idx = RXBUF[8]*16 + RXBUF[9];
       (idx>=0 && idx<64) ? decode_into(idx, 10);
@@ -232,58 +161,66 @@ function handle_rx(len) local(op,idx)
   );
 );
 
-// ---- Multiplicateur step rate (sync).   [REPO main.lua STEP_RATES l.277-283]
-function rate_mult(i)
-( i==0?0.25 : i==1?0.5 : i==2?1 : i==3?2 : 4; );
-
-// ---- Duree d'un pas en samples ---------------------------------------------
-function compute_step_samps() local(base,ssec)
+function selected_pattern_index() local(g,p)
 (
-  slider11>0.5 ? (
-    base = (60/tempo)/4;                 // 1/16 de noire (sec)  [JSFX tempo]
-    PAT_TRP[psel] ? base = base*4/3;      // triplet  [REPO main.lua l.789]
-    ssec = base / rate_mult(slider12);
-  ) : ( ssec = slider13/1000; );
-  step_samps = max(1, floor(ssec*srate));
+  g = floor(slider6);
+  p = floor(slider7);
+  g*16 + p;
 );
 
-// ---- Un pas -> notes MIDI (legato slide + velocite accent) -----------------
-// [REPO main.lua preview_start l.557-597]
+function rate_mult(i)
+(
+  i==0?0.25 : i==1?0.5 : i==2?1 : i==3?2 : 4;
+);
+function compute_step_samps() local(base,ssec)
+(
+  base = (60/tempo)/4;
+  PAT_TRP[psel] ? base = base*4/3;
+  ssec = base / rate_mult(slider8);
+  step_samps = max(1, floor(ssec*srate));
+);
 function emit_step(s,off) local(b,pitch,note,vel,last)
 (
   b = psel*16 + s;
   PAT_RST[b] ? ( release_all(off); ) : (
     pitch = PAT_PITCH[b];
-    note  = (pitch%128) + 12;            // storage_to_midi  [REPO notes.py]
-    vel   = PAT_ACC[b] ? slider10 : slider9;
+    note = (pitch%128) + 12;
+    vel = PAT_ACC[b] ? slider10 : slider9;
     (PAT_SLD[b] && nactive>0) ? (
       last = ACTIVE[nactive-1];
       note != last ? ( noteon(off,note,vel); ACTIVE[nactive]=note; nactive+=1; );
-      // meme pitch -> sustain (aucun retrigger)  [REPO main.lua l.573-578]
     ) : (
-      release_all(off);                   // attaque propre
+      release_all(off);
       noteon(off,note,vel); ACTIVE[nactive]=note; nactive+=1;
     );
   );
 );
-
-// ---- Demarrage preview MIDI ------------------------------------------------
+function stop_seq()
+(
+  seq_on ? rt(0,0xFC);
+  seq_on = 0;
+);
 function start_preview()
 (
-  seq_on ? ( rt(0,0xFC); seq_on=0; );     // ne pas melanger les 2 modes
-  psel = floor(slider8);
+  stop_seq();
+  psel = selected_pattern_index();
   PAT_OK[psel] ? (
     nactive=0; cur_step=0;
     prev_len = PAT_SC[psel]; prev_len<1?prev_len=1; prev_len>16?prev_len=16;
     compute_step_samps();
-    smp_to_next = 1;                       // 1er pas quasi immediat
+    smp_to_next = 1;
     play_on = 1;
-  ) : ( play_on = 0; );                    // pattern non charge -> rien
+    status = 4;
+  ) : (
+    play_on = 0;
+    status = 0;
+  );
 );
-
-function stop_preview() ( play_on ? panic(0); play_on=0; );
-
-// ---- Moteur preview (echantillon-precis).      [JSFX samplesblock, midisend off]
+function stop_preview()
+(
+  play_on ? panic(0);
+  play_on=0;
+);
 function run_preview() local(rem,off)
 (
   rem = samplesblock; off = 0;
@@ -291,221 +228,177 @@ function run_preview() local(rem,off)
     off += smp_to_next; rem -= smp_to_next;
     emit_step(cur_step, off);
     cur_step += 1;
-    cur_step >= prev_len ? cur_step = 0;   // boucle (test)
+    cur_step >= prev_len ? cur_step = 0;
     smp_to_next = step_samps;
   );
   smp_to_next -= rem;
 );
 
-// ---- Sequenceur interne : Start + generation F8 ----------------------------
-// [REPO docs/td3-mo-fr.md Real-Time ; main.lua l.502-541]
 function start_seq()
 (
-  play_on ? ( panic(0); play_on=0; );
-  // En sync USB la TD-3 est ESCLAVE de l'horloge : elle n'avance que sur les
-  // F8. Un Start (FA) seul ne joue rien sans clock -> on force la generation
-  // d'horloge avec le Start.            [REPO docs/td3-mo-fr.md Real-Time]
-  slider18 = 1;
-  rt(0,0xFA);                              // MIDI Start
-  seq_on = 1; clk_to_next = 1;
+  stop_preview();
+  rt(0,0xFA);
+  seq_on = 1;
+  clk_to_next = 1;
+  status = 5;
 );
-function stop_seq() ( seq_on ? rt(0,0xFC); seq_on=0; );
-
 function clock_interval() local(csec,p)
 (
-  // PPQ selon slider2 (rate ecrit dans la TD-3).        [REPO config.py 0x1A]
-  slider2==0 ? csec = 1.0 :                // 1 PPS
-  ( p = slider2==1?2 : slider2==2?24 : 48; csec = (60/tempo)/p; );
+  slider5==0 ? csec = 1.0 :
+  ( p = slider5==1?2 : slider5==2?24 : 48; csec = (60/tempo)/p; );
   clk_samps = max(1, floor(csec*srate));
 );
-
 function run_clockgen() local(rem,off)
 (
   clock_interval();
   rem = samplesblock; off = 0;
   while(clk_to_next <= rem) (
     off += clk_to_next; rem -= clk_to_next;
-    rt(off, 0xF8);                         // Timing Clock
+    rt(off, 0xF8);
     clk_to_next = clk_samps;
   );
   clk_to_next -= rem;
 );
 
-// ---- Lecture de banque : 64 requetes 0x77 espacees -------------------------
 function start_read_bank() local(i)
-( i=0; loop(64, PAT_OK[i]=0; i+=1; );
-  req_pending=1; req_idx=0; req_to_next=1; req_int=max(1,floor(0.012*srate)); );
-
+(
+  i=0; loop(64, PAT_OK[i]=0; i+=1; );
+  req_pending=1;
+  req_idx=0;
+  req_to_next=1;
+  req_int=max(1,floor(0.012*srate));
+  status = 3;
+);
 function pump_bank()
 (
   req_to_next -= samplesblock;
   req_to_next <= 0 ? (
     req_pattern(floor(req_idx/16), req_idx%16);
-    req_idx += 1; req_to_next = req_int;
+    req_idx += 1;
+    req_to_next = req_int;
     req_idx >= 64 ? req_pending = 0;
   );
 );
 
-// ---- AUTO-TEST INTERNE (tourne dans Reaper, au chargement) ------------------
-// Pas de dependance externe : on fabrique une trame 0x78 synthetique avec un
-// mini-encodeur (miroir de pattern.py to_bytes : paires de nibbles + mask
-// rest), on la decode avec decode_into, et on compare au pattern d'origine.
-// Couvre aussi la construction d'entete/opcode des trames SysEx.
-// [REPO pattern.py to_bytes / _encode_pairs / _MASK_LAYOUT]
-function enc_pair(addr,v) ( RXBUF[addr]=floor(v/16)%16; RXBUF[addr+1]=v%16; );
-function enc_mask(addr,s3,s2,s1,s0)
-( RXBUF[addr] = (TSTR[s3]?8:0)+(TSTR[s2]?4:0)+(TSTR[s1]?2:0)+(TSTR[s0]?1:0); );
-
-function selftest() local(s,fail,pit)
+function setup_td3()
 (
-  fail = 0;
-
-  // a) Entete/opcode des trames (sans emettre : on inspecte TXBUF).
-  syx_begin(); syx_push(0x1B); syx_push(2);
-  (TXBUF[0]==0xF0 && TXBUF[1]==0x00 && TXBUF[2]==0x20 && TXBUF[3]==0x32 &&
-   TXBUF[4]==0x00 && TXBUF[5]==0x01 && TXBUF[6]==0x0A &&
-   TXBUF[7]==0x1B && TXBUF[8]==2) ? 0 : fail+=1;
-
-  // b) Trame 0x78 synthetique : pitch=24+(s*5+3)%37 (midi), accent s%3==0,
-  //    slide s%4==1, rest s%5==2, step_count 13, triplet 0.
-  s=0; loop(123, RXBUF[s]=0; s+=1; );
-  RXBUF[0]=0xF0;RXBUF[1]=0x00;RXBUF[2]=0x20;RXBUF[3]=0x32;RXBUF[4]=0x00;RXBUF[5]=0x01;RXBUF[6]=0x0A;
-  RXBUF[7]=0x78; RXBUF[8]=0; RXBUF[9]=0;
-  s=0; loop(16,
-    pit = (24+(s*5+3)%37) - 12;            // storage = midi - 12
-    enc_pair(10+0x02+2*s, pit);
-    enc_pair(10+0x22+2*s, (s%3==0)?1:0);
-    enc_pair(10+0x42+2*s, (s%4==1)?1:0);
-    TSTR[s] = (s%5==2)?1:0;
-    s+=1;
-  );
-  enc_pair(10+0x64, 13);                    // step_count
-  enc_mask(10+0x6C, 7,6,5,4);               // rest mask [REPO _MASK_LAYOUT]
-  enc_mask(10+0x6D, 3,2,1,0);
-  enc_mask(10+0x6E, 15,14,13,12);
-  enc_mask(10+0x6F, 11,10,9,8);
-  RXBUF[122]=0xF7;
-
-  decode_into(0, 10);                       // decode reel du plugin
-
-  s=0; loop(16,
-    pit = (24+(s*5+3)%37) - 12;
-    PAT_PITCH[s] != pit            ? fail+=1;
-    PAT_ACC[s]   != ((s%3==0)?1:0) ? fail+=1;
-    PAT_SLD[s]   != ((s%4==1)?1:0) ? fail+=1;
-    PAT_RST[s]   != ((s%5==2)?1:0) ? fail+=1;
-    (((PAT_PITCH[s]%128)+12) != (24+(s*5+3)%37)) ? fail+=1;  // storage_to_midi
-    s+=1;
-  );
-  PAT_SC[0]  != 13 ? fail+=1;
-  PAT_TRP[0] != 0  ? fail+=1;
-
-  PAT_OK[0] = 0;                            // ne pas afficher slot 0 "charge"
-  selftest_fail = fail; selftest_done = 1;
+  syx1(0x1B,slider4);          // selected clock source
+  syx1(0x1A,slider5);          // selected clock rate
+  syx1(0x1C,slider3);
+  set_channels(slider2,slider2);
+  cfg_have=0; fw_have=0;
+  verify_pending = 1;
+  verify_to_next = max(1,floor(0.20*srate));
+  status = 1;
+);
+function check_td3()
+(
+  cfg_have=0; fw_have=0;
+  req_fw(); req_config();
+  status = 2;
 );
 
-selftest();
-
-@slider
-// Rien : tous les declenchements sont geres en @block (front montant) pour
-// que les midisend_buf partent dans le flux MIDI du bloc.   [JSFX midi.php]
-
 @block
-ch = (max(1,floor(slider4))-1) % 16;
+ch = (max(1,floor(slider2))-1) % 16;
 
-// 1) Reception : vider TOUS les messages.        [JSFX midi.php midirecv_buf]
 moff = 0;
 while ( (rlen = midirecv_buf(moff, RXBUF, 256)) > 0 ) ( handle_rx(rlen); );
 
-// 2) Declencheurs (sliders momentanes auto-remis a 0).
-slider5>0.5 ? ( syx1(0x1B,slider1); syx1(0x1A,slider2); syx1(0x1C,slider3);
-                set_channels(slider4,slider4); slider5=0; );
-slider6>0.5 ? ( cfg_have=0; fw_have=0; rx_total=0; rx_sysex=0; last_op=0;
-                req_fw(); req_config(); slider6=0; );
-slider7>0.5 ? ( start_read_bank(); slider7=0; );
-slider14>0.5 ? ( start_preview(); slider14=0; );
-slider15>0.5 ? ( stop_preview(); slider15=0; );
-slider16>0.5 ? ( start_seq(); slider16=0; );
-slider17>0.5 ? ( stop_seq(); slider17=0; );
+act = floor(slider1);
+act != last_action && act > 0 ? (
+  act==1 ? setup_td3();
+  act==2 ? check_td3();
+  act==3 ? start_read_bank();
+  act==4 ? start_preview();
+  act==5 ? ( stop_preview(); status=0; );
+  act==6 ? start_seq();
+  act==7 ? ( stop_seq(); status=0; );
+  slider1 = 0;
+  act = 0;
+);
+last_action = act;
 
-// 2b) Changement d'un reglage -> envoi SysEx immediat + relecture auto de
-// l'etat (l'affichage se met a jour tout seul apres le changement).
-slider1 != last_s1 ? ( syx1(0x1B,slider1);             last_s1=slider1; arm_verify(); );
-slider2 != last_s2 ? ( syx1(0x1A,slider2);             last_s2=slider2; arm_verify(); );
-slider3 != last_s3 ? ( syx1(0x1C,slider3);             last_s3=slider3; arm_verify(); );
-slider4 != last_s4 ? ( set_channels(slider4,slider4);  last_s4=slider4; arm_verify(); );
-
-// 3) Taches continues.
-verify_pending ? ( verify_to -= samplesblock;
-  verify_to <= 0 ? ( cfg_have=0; fw_have=0; rx_total=0; rx_sysex=0; last_op=0;
-                     req_fw(); req_config(); verify_pending=0; ); );
 req_pending ? pump_bank();
+verify_pending ? (
+  verify_to_next -= samplesblock;
+  verify_to_next <= 0 ? (
+    req_fw(); req_config();
+    verify_pending = 0;
+    status = 2;
+  );
+);
 play_on ? run_preview();
-(seq_on && slider18>0.5) ? run_clockgen();
+(seq_on && slider11>0.5) ? run_clockgen();
 
-@gfx 520 380
-gfx_set(0.12,0.12,0.12,1); gfx_rect(0,0,gfx_w,gfx_h);
-gfx_set(1,1,1,1); gfx_x=10; gfx_y=8;
-gfx_drawstr("TD-3-MO controller  -  config / verification / preview");
+@gfx 620 300
+gfx_set(0.08,0.08,0.08,1); gfx_rect(0,0,gfx_w,gfx_h);
+gfx_set(1,1,1,1); gfx_x=12; gfx_y=10;
+gfx_drawstr("TD-3-MO Reaper check");
 
-yy = 34;
-function line(str) ( gfx_x=12; gfx_y=yy; gfx_drawstr(str); yy+=18; );
+yy = 36;
+function line(#s) ( gfx_x=14; gfx_y=yy; gfx_drawstr(#s); yy+=18; );
 function clk_name(v)
-( v==0?strcpy(#tmp,"Internal"):v==1?strcpy(#tmp,"MIDI DIN"):
-  v==2?strcpy(#tmp,"MIDI USB"):strcpy(#tmp,"Trigger"); );
+(
+  v==0?strcpy(#tmp,"Internal"):v==1?strcpy(#tmp,"MIDI DIN"):
+  v==2?strcpy(#tmp,"MIDI USB"):strcpy(#tmp,"Trigger");
+);
 function rate_name(v)
-( v==0?strcpy(#tmp,"1 PPS"):v==1?strcpy(#tmp,"2 PPQ"):
-  v==2?strcpy(#tmp,"24 PPQ"):strcpy(#tmp,"48 PPQ"); );
-function prio_name(v)
-( v==0?strcpy(#tmp,"Low"):v==1?strcpy(#tmp,"High"):strcpy(#tmp,"Last"); );
+(
+  v==0?strcpy(#tmp,"1 PPS"):v==1?strcpy(#tmp,"2 PPQ"):
+  v==2?strcpy(#tmp,"24 PPQ"):strcpy(#tmp,"48 PPQ");
+);
+function group_name(v)
+(
+  v==0?strcpy(#grp,"I"):v==1?strcpy(#grp,"II"):v==2?strcpy(#grp,"III"):strcpy(#grp,"IV");
+);
+function pat_name(v)
+(
+  v<8 ? sprintf(#pat,"%dA",v+1) : sprintf(#pat,"%dB",(v%8)+1);
+);
 
-// --- Auto-test interne (au chargement) ---
-selftest_done ? ( selftest_fail==0 ? gfx_set(0.4,1,0.4,1) : gfx_set(1,0.3,0.3,1) )
-              : gfx_set(0.6,0.6,0.6,1);
-sprintf(#r,"Auto-test interne (trames + decodage 0x78) : %s",
-        selftest_done ? (selftest_fail==0 ? "PASS" : "FAIL") : "-"); line(#r);
+gfx_set(0.7,0.86,1,1); line("1. Change sync + verify  2. Check only  3. Read full bank");
+line("4. Preview selected bank pattern  6. Start FA+F8 hardware test");
 
-// --- Etat reellement compris par la TD-3 (read-back) ---
-gfx_set(0.7,0.85,1,1);
-line("=== Ce que la TD-3 a repondu (request 0x76 / 0x09) ===");
-// Diagnostic du flux ENTRANT : si "MIDI in recu" reste a 0 apres Verifier,
-// la piste n'est pas armee / pas de monitoring -> le retour TD-3 n'arrive pas.
-rx_total>0 ? gfx_set(0.4,1,0.4,1) : gfx_set(1,0.65,0,1);
-sprintf(#r,"MIDI in recu : %d msg / %d sysex (dernier op %d, len %d)  [118=cfg 9=fw 120=pat]",
-        rx_total, rx_sysex, last_op, last_len); line(#r);
+yy += 6;
 gfx_set(1,1,1,1);
-fw_have ? ( sprintf(#r,"Firmware : %d.%d.%d", fw_maj,fw_min,fw_rev); line(#r); )
-        : line("Firmware : (pas de reponse - verifier routing MIDI IN + monitoring)");
+fw_have ? ( sprintf(#r,"Firmware: %d.%d.%d",fw_maj,fw_min,fw_rev); line(#r); )
+        : line("Firmware: no reply yet");
+
 cfg_have ? (
-  clk_name(cfg_clksrc);  sprintf(#r,"Clock source : %s", #tmp); line(#r);
-  rate_name(cfg_clkrate); sprintf(#r,"Clock rate   : %s", #tmp); line(#r);
-  sprintf(#r,"Canal in/out : %d / %d", cfg_in_ch, cfg_out_ch); line(#r);
-  sprintf(#r,"Accent threshold : %d", cfg_accthr); line(#r);
-  prio_name(cfg_keyprio); sprintf(#r,"Key priority : %s   Multi-trigger : %d", #tmp, cfg_multi); line(#r);
-  // Diagnostic (compare au reglage demande).   [REPO main.lua check_td3_config]
-  cfg_clksrc==0 ?
-    ( gfx_set(1,0.4,0.3,1); line("!! Clock source = Internal : la TD-3 ignore les notes MIDI."); gfx_set(1,1,1,1); )
-  : ( gfx_set(0.4,1,0.4,1); line("OK Clock source compatible MIDI in."); gfx_set(1,1,1,1); );
-  cfg_in_ch != floor(slider4) ?
-    ( gfx_set(1,0.65,0,1); sprintf(#r,"!! Canal TD-3 = %d, le plugin envoie sur %d.", cfg_in_ch, floor(slider4)); line(#r); gfx_set(1,1,1,1); )
-  : ( gfx_set(0.4,1,0.4,1); line("OK Canal coherent."); gfx_set(1,1,1,1); );
-) : line("Config : appuyer '>>> Verifier' (request 0x75 + 0x08).");
+  clk_name(cfg_clksrc); sprintf(#r,"Clock source: %s",#tmp); line(#r);
+  rate_name(cfg_clkrate); sprintf(#r,"Clock rate: %s",#tmp); line(#r);
+  sprintf(#r,"MIDI in/out: %d / %d   Accent threshold: %d",
+    cfg_in_ch,cfg_out_ch,cfg_accthr); line(#r);
+  cfg_clksrc==floor(slider4) && cfg_clkrate==floor(slider5) ? (
+    gfx_set(0.4,1,0.45,1); line("OK: TD-3 sync config matches the requested values."); gfx_set(1,1,1,1);
+  ) : (
+    gfx_set(1,0.55,0.25,1); line("!! Sync mismatch: run Change sync + verify again."); gfx_set(1,1,1,1);
+  );
+  cfg_in_ch != floor(slider2) ? (
+    gfx_set(1,0.7,0.25,1);
+    sprintf(#r,"!! Channel mismatch: TD-3 input %d, JSFX sends %d.",cfg_in_ch,floor(slider2)); line(#r);
+    gfx_set(1,1,1,1);
+  );
+  cfg_accthr != floor(slider3) ? (
+    gfx_set(1,0.7,0.25,1);
+    sprintf(#r,"!! Accent threshold mismatch: TD-3 %d, requested %d.",cfg_accthr,floor(slider3)); line(#r);
+    gfx_set(1,1,1,1);
+  );
+) : (
+  verify_pending ? line("Config: sync written, waiting for read-back...")
+                 : line("Config: choose Action = Change sync + verify.");
+);
 
 yy += 6;
-gfx_set(0.7,0.85,1,1); line("=== Banque / preview ==="); gfx_set(1,1,1,1);
 n=0; i=0; loop(64, PAT_OK[i]?n+=1; i+=1; );
-sprintf(#r,"Banque lue : %d / 64 patterns%s", n, req_pending?"  (lecture en cours...)":""); line(#r);
+group_name(floor(slider6)); pat_name(floor(slider7));
+psel = selected_pattern_index();
+sprintf(#r,"Banque lue: %d / 64     Selection: %s-%s (%s)",
+  n,#grp,#pat,PAT_OK[psel]?"loaded":"not loaded"); line(#r);
 
-// Slot selectionne -> libelle TB-303 (I-1A ...).   [REPO yaml_io format_pattern_label]
-psel = floor(slider8); g = floor(psel/16); nn = psel%16;
-g==0?strcpy(#tmp,"I"):g==1?strcpy(#tmp,"II"):g==2?strcpy(#tmp,"III"):strcpy(#tmp,"IV");
-nn<8?strcpy(#tmp2,"A"):strcpy(#tmp2,"B");
-sprintf(#r,"Pattern selectionne : %s-%d%s   (%s)", #tmp, (nn%8)+1, #tmp2,
-        PAT_OK[psel]?"charge":"NON charge"); line(#r);
-sprintf(#r,"Preview MIDI : %s    Sequenceur interne : %s",
-        play_on?"EN COURS":"arrete", seq_on?"EN COURS (FA+F8)":"arrete"); line(#r);
+sprintf(#r,"Preview MIDI: %s     Test FA+F8: %s",
+  play_on?"running":"stopped", seq_on?"running":"stopped"); line(#r);
 
-yy += 6;
-gfx_set(0.6,0.6,0.6,1);
-line("Routing : sortie piste -> TD-3-MO ; input TD-3-MO + monitoring ON.");
-line("Sequence type : Envoyer config -> Verifier -> Lire banque -> Play.");
+gfx_set(0.72,0.72,0.72,1);
+line("Start sequenceur interne (pattern facade): FA + F8 plays the slot selected manually on the TD-3.");
+line("Le Start interne joue le pattern selectionne sur la facade TD-3.");
